@@ -1,0 +1,5 @@
+{
+  "name": "Narrative Analytics Engine",
+  "description": "A research-grade platform for automated insight generation and decision support, providing explainable analytics through descriptive, diagnostic, predictive, and prescriptive narratives.",
+  "requestFramePermissions": []
+}
