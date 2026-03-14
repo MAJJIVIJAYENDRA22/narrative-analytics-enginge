@@ -69,8 +69,22 @@ export async function analyzeDataset(data: DataRow[]): Promise<AnalysisSummary> 
   });
 
   if (!response.ok) {
-    const message = await response.text();
-    throw new Error(message || "Failed to generate analytics.");
+    const raw = await response.text();
+    let message = "Failed to generate analytics.";
+
+    try {
+      const parsed = JSON.parse(raw);
+      if (parsed?.error) {
+        message = String(parsed.error);
+      }
+    } catch {
+      // If backend returned HTML (e.g., fallback 500 page), keep user message clean.
+      if (raw && !raw.trim().startsWith("<")) {
+        message = raw;
+      }
+    }
+
+    throw new Error(message);
   }
 
   return (await response.json()) as AnalysisSummary;

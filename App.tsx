@@ -2,9 +2,10 @@
 import React, { useState } from 'react';
 import { Layout } from './components/Layout';
 import { Dashboard } from './components/Dashboard';
+import { ErrorBoundary } from './components/ErrorBoundary';
 import { DataRow, AnalysisSummary, DataQualityReport } from './types';
 import { assessDataQuality, analyzeDataset, cleanDataset } from './services/geminiService';
-import { Upload, FileText, CheckCircle, AlertTriangle, XCircle, Loader2, Sparkles, AlertCircle, Wand2, Download, Table } from 'lucide-react';
+import { Upload, FileText, CheckCircle, AlertTriangle, XCircle, Loader2, Sparkles, AlertCircle, Wand2, Download, Table, ArrowRight } from 'lucide-react';
 
 const App: React.FC = () => {
   const [rawData, setRawData] = useState<DataRow[] | null>(null);
@@ -15,10 +16,15 @@ const App: React.FC = () => {
   const [isLoading, setIsLoading] = useState(false);
   const [loadingStep, setLoadingStep] = useState('');
   const [error, setError] = useState<string | null>(null);
+  const [uploadedFileName, setUploadedFileName] = useState<string>('');
 
   const handleFileUpload = (event: React.ChangeEvent<HTMLInputElement>) => {
     const file = event.target.files?.[0];
     if (!file) return;
+
+    // Store filename without extension
+    const fileNameWithoutExt = file.name.replace(/\.[^/.]+$/, '');
+    setUploadedFileName(fileNameWithoutExt);
 
     const reader = new FileReader();
     reader.onload = (e) => {
@@ -82,14 +88,20 @@ const App: React.FC = () => {
     }
     setIsLoading(true);
     setError(null);
-    setLoadingStep('Initializing statistical engines...');
-    
+    setLoadingStep('data');
+
     try {
-      setLoadingStep('Synthesizing narrative layers...');
+      await new Promise(r => setTimeout(r, 700));
+      setLoadingStep('chart');
+      console.log('Sending data to backend:', targetData.length, 'records');
       const results = await analyzeDataset(targetData);
+      console.log('Received analysis:', results);
+      setLoadingStep('insights');
+      await new Promise(r => setTimeout(r, 500));
       setAnalysis(results);
       setError(null);
     } catch (err: any) {
+      console.error('Analysis error:', err);
       setError(`Synthesis Error: ${err.message || "Unknown error"}`);
     } finally {
       setIsLoading(false);
@@ -104,29 +116,80 @@ const App: React.FC = () => {
     setQualityReport(null);
     setAnalysis(null);
     setError(null);
+    setUploadedFileName('');
   };
 
   if (isLoading) {
+    const pipelineSteps = [
+      { key: 'data',     label: 'Right Data',     desc: 'Validating & preparing dataset' },
+      { key: 'chart',    label: 'Right Chart',    desc: 'Selecting optimal chart types' },
+      { key: 'insights', label: 'Clear Insights', desc: 'Synthesizing analytical narrative' },
+    ];
+    const activeIdx = pipelineSteps.findIndex(s => s.key === loadingStep);
     return (
       <Layout>
-        <div className="flex flex-col items-center justify-center min-h-[60vh] space-y-8 text-center animate-in fade-in zoom-in duration-500">
-          <div className="relative">
-             <div className="absolute inset-0 bg-gray-100 rounded-full animate-ping opacity-20"></div>
-             <Loader2 className="w-16 h-16 text-black animate-spin relative z-10" />
-          </div>
+        <div className="flex flex-col items-center justify-center min-h-[60vh] space-y-14 text-center animate-in fade-in duration-500">
           <div className="space-y-3">
-            <h2 className="text-2xl font-semibold text-gray-900 tracking-tight">{loadingStep}</h2>
-            <p className="text-gray-400 font-light max-w-xs mx-auto">This may take a few moments as we compute the full descriptive-to-prescriptive stack.</p>
+            <div className="inline-flex items-center gap-2 px-4 py-2 bg-gray-50 border border-gray-100 rounded-full text-xs font-semibold tracking-widest text-gray-500 uppercase">
+              <Loader2 className="w-3 h-3 animate-spin" /> Processing
+            </div>
+            <h2 className="text-3xl font-bold text-gray-900 tracking-tight">Generating Your Analysis</h2>
           </div>
+
+          <div className="flex items-start">
+            {pipelineSteps.map((step, i) => {
+              const isDone = i < activeIdx;
+              const isActive = i === activeIdx;
+              return (
+                <React.Fragment key={step.key}>
+                  <div className={`flex flex-col items-center gap-4 w-44 transition-all duration-500 ${
+                    isActive ? 'opacity-100 scale-105' : isDone ? 'opacity-70' : 'opacity-25'
+                  }`}>
+                    <div className={`w-14 h-14 rounded-2xl flex items-center justify-center shadow-sm transition-all duration-500 ${
+                      isDone ? 'bg-emerald-500' : isActive ? 'bg-black' : 'bg-gray-100'
+                    }`}>
+                      {isDone
+                        ? <CheckCircle className="w-7 h-7 text-white" />
+                        : isActive
+                          ? <Loader2 className="w-7 h-7 text-white animate-spin" />
+                          : <span className="text-sm font-bold text-gray-400">{i + 1}</span>
+                      }
+                    </div>
+                    <div>
+                      <p className={`text-sm font-bold tracking-wide ${
+                        isActive ? 'text-gray-900' : isDone ? 'text-gray-500' : 'text-gray-300'
+                      }`}>{step.label}</p>
+                      <p className="text-xs text-gray-400 font-light mt-0.5 max-w-[130px] mx-auto leading-snug">{step.desc}</p>
+                    </div>
+                  </div>
+                  {i < pipelineSteps.length - 1 && (
+                    <div className={`w-14 h-px mt-7 mx-2 transition-all duration-700 ${
+                      i < activeIdx ? 'bg-emerald-400' : 'bg-gray-200'
+                    }`} />
+                  )}
+                </React.Fragment>
+              );
+            })}
+          </div>
+
+          <p className="text-gray-400 font-light text-sm max-w-xs">This may take a few moments as we compute the full analytical stack.</p>
         </div>
       </Layout>
     );
   }
 
   if (analysis) {
+    console.log('Analysis data received:', JSON.stringify(analysis, null, 2));
     return (
       <Layout>
-        <Dashboard analysis={analysis} onReset={reset} data={cleanedData || rawData || []} />
+        <ErrorBoundary>
+          <Dashboard 
+            analysis={analysis} 
+            onReset={reset} 
+            data={cleanedData || rawData || []} 
+            fileName={uploadedFileName}
+          />
+        </ErrorBoundary>
       </Layout>
     );
   }
@@ -148,6 +211,13 @@ const App: React.FC = () => {
                 Upload your dataset to generate a comprehensive 4-tier analysis report. 
                 Experience explainable ML designed for human decision-making.
               </p>
+              <div className="flex items-center justify-center gap-3 pt-2">
+                <span className="text-sm font-bold text-gray-900 tracking-tight">Right Data</span>
+                <ArrowRight className="w-4 h-4 text-gray-300" />
+                <span className="text-sm font-bold text-gray-900 tracking-tight">Right Chart</span>
+                <ArrowRight className="w-4 h-4 text-gray-300" />
+                <span className="text-sm font-bold text-gray-900 tracking-tight">Clear Insights</span>
+              </div>
             </div>
 
             <div className="bg-white p-12 rounded-[40px] border-2 border-dashed border-gray-100 hover:border-gray-300 transition-all group relative cursor-pointer">
