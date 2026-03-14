@@ -3,6 +3,7 @@ import os
 import pandas as pd
 from flask import Flask, jsonify, request
 from flask_cors import CORS
+from werkzeug.exceptions import HTTPException
 
 from analytics_engine import run_full_analysis
 from model_loader import get_sentiment_model
@@ -19,6 +20,19 @@ CORS(
 
 # Lazy load sentiment model to avoid startup crashes
 SENTIMENT_MODEL = None
+
+
+@app.errorhandler(HTTPException)
+def handle_http_exception(err: HTTPException):
+    """Ensure HTTP errors are returned as JSON instead of HTML pages."""
+    return jsonify({"error": err.description or "Request failed."}), err.code
+
+
+@app.errorhandler(Exception)
+def handle_unexpected_exception(err: Exception):
+    """Catch-all safeguard to prevent HTML 500 responses."""
+    app.logger.exception("Unhandled server error")
+    return jsonify({"error": f"Internal server error: {str(err)}"}), 500
 
 
 def get_model():

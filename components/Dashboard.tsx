@@ -1,25 +1,262 @@
 
-import React from 'react';
-import { 
-  BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, 
-  Cell, AreaChart, Area, PieChart, Pie, Legend, Label, LabelList
+import React, { useMemo, useRef, useState } from 'react';
+import {
+  BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer,
+  AreaChart, Area, LineChart, Line, LabelList,
+  PieChart, Pie, Cell, Legend, ScatterChart, Scatter
 } from 'recharts';
-import { AnalysisSummary, DataRow } from '../types';
+import { AnalysisSummary, ChartMeta, DataRow } from '../types';
 import { 
   TrendingUp, Activity, BarChart2, Lightbulb, 
   ShieldCheck, AlertCircle, ArrowUpRight, ArrowDownRight,
-  Layout as LayoutIcon, Maximize2, Filter, Share2, Download
+  Layout as LayoutIcon, Maximize2, Filter, Share2, Download, FileDown, Loader2
 } from 'lucide-react';
+import html2canvas from 'html2canvas';
+import jsPDF from 'jspdf';
 
 interface DashboardProps {
   analysis: AnalysisSummary;
   onReset: () => void;
   data: DataRow[];
+  fileName?: string;
 }
 
-const COLORS = ['#1e293b', '#64748b', '#94a3b8', '#cbd5e1', '#f1f5f9'];
+export const Dashboard: React.FC<DashboardProps> = ({ analysis, onReset, data, fileName = 'report' }) => {
+  console.log('Dashboard rendering with analysis:', analysis);
+  
+  const visualizationsRef = useRef<HTMLDivElement>(null);
+  const [isGeneratingPDF, setIsGeneratingPDF] = useState(false);
+  
+  const executive = analysis.executive ?? {
+    kpis: [],
+    profitLoss: [],
+    revenueExpenses: [],
+    salesByCategory: [],
+    regionalPerformance: [],
+    topProducts: [],
+  };
 
-export const Dashboard: React.FC<DashboardProps> = ({ analysis, onReset, data }) => {
+  const [selectedDate, setSelectedDate] = useState<string>('All');
+  const [selectedRegion, setSelectedRegion] = useState<string>('All');
+  const [selectedCategory, setSelectedCategory] = useState<string>('All');
+  const [selectedSegment, setSelectedSegment] = useState<string>('All');
+
+  const normalize = (value: string) => value.toLowerCase().replace(/[^a-z0-9]/g, '');
+  const parseNumeric = (value: any): number => {
+    if (typeof value === 'number') return Number.isFinite(value) ? value : 0;
+    if (typeof value === 'string') {
+      const cleaned = value.replace(/[$,%\s,]/g, '');
+      const parsed = Number(cleaned);
+      return Number.isFinite(parsed) ? parsed : 0;
+    }
+    return 0;
+  };
+  const toMonthLabel = (value: any): string | null => {
+    if (!value) return null;
+    const d = new Date(value);
+    if (!Number.isNaN(d.getTime())) {
+      return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}`;
+    }
+    if (typeof value === 'string') {
+      const text = value.trim();
+      if (/^\d{4}-\d{2}$/.test(text)) return text;
+      if (/^\d{4}$/.test(text)) return `${text}-01`;
+    }
+    return null;
+  };
+  const buildBucketSeries = (rows: DataRow[], buckets = 6) => {
+    if (rows.length === 0) return [] as string[];
+    const bucketCount = Math.min(buckets, rows.length);
+    return rows.map((_, i) => `P${Math.floor((i * bucketCount) / rows.length) + 1}`);
+  };
+
+  const detectedColumns = useMemo(() => {
+    const columns = data.length ? Object.keys(data[0]) : [];
+    const findByKeywords = (keywords: string[]) => {
+      const normalizedKeywords = keywords.map(normalize);
+      return columns.find((col) => {
+        const candidate = normalize(col);
+        return normalizedKeywords.some((kw) => candidate.includes(kw));
+      });
+    };
+
+    const numericColumns = columns
+      .map((col) => {
+        const sample = data.slice(0, 200);
+        if (sample.length === 0) return { col, ratio: 0 };
+        const valid = sample.filter((row) => {
+          const raw = row[col];
+          if (raw === null || raw === undefined || raw === '') return false;
+          return Number.isFinite(parseNumeric(raw));
+        }).length;
+        return { col, ratio: valid / sample.length };
+      })
+      .filter((entry) => entry.ratio >= 0.6)
+      .map((entry) => entry.col);
+
+    const revenue = findByKeywords(['revenue', 'sales', 'income', 'turnover']) ?? numericColumns[0];
+    const profit = findByKeywords(['profit', 'margin', 'netincome']) ?? numericColumns[1] ?? numericColumns[0];
+    const orders = findByKeywords(['orders', 'order', 'quantity', 'qty', 'units', 'transactions']) ?? numericColumns[2];
+    const discount = findByKeywords(['discount', 'disc', 'promotion', 'coupon']) ?? numericColumns.find((col) => col !== revenue && col !== profit);
+
+    return {
+      date: findByKeywords(['date', 'month', 'year', 'period', 'time']),
+      region: findByKeywords(['region', 'country', 'state', 'city', 'territory']),
+      category: findByKeywords(['category', 'department', 'class', 'type']),
+      segment: findByKeywords(['segment', 'customersegment', 'tier', 'customertype']),
+      product: findByKeywords(['product', 'item', 'sku', 'model', 'name']),
+      revenue,
+      profit,
+      orders,
+      discount,
+    };
+  }, [data]);
+
+  const filterOptions = useMemo(() => {
+    const dateOptionsSet = new Set<string>();
+    const regionOptionsSet = new Set<string>();
+    const categoryOptionsSet = new Set<string>();
+    const segmentOptionsSet = new Set<string>();
+
+    data.forEach((row) => {
+      const d = detectedColumns.date ? toMonthLabel(row[detectedColumns.date]) : null;
+      if (d) dateOptionsSet.add(d);
+      if (detectedColumns.region && row[detectedColumns.region]) regionOptionsSet.add(String(row[detectedColumns.region]));
+      if (detectedColumns.category && row[detectedColumns.category]) categoryOptionsSet.add(String(row[detectedColumns.category]));
+      if (detectedColumns.segment && row[detectedColumns.segment]) segmentOptionsSet.add(String(row[detectedColumns.segment]));
+    });
+
+    return {
+      dates: Array.from(dateOptionsSet).sort(),
+      regions: Array.from(regionOptionsSet).sort(),
+      categories: Array.from(categoryOptionsSet).sort(),
+      segments: Array.from(segmentOptionsSet).sort(),
+    };
+  }, [data, detectedColumns]);
+
+  const filteredRows = useMemo(() => {
+    return data.filter((row) => {
+      const rowDate = detectedColumns.date ? toMonthLabel(row[detectedColumns.date]) : null;
+      const rowRegion = detectedColumns.region ? String(row[detectedColumns.region] ?? '') : '';
+      const rowCategory = detectedColumns.category ? String(row[detectedColumns.category] ?? '') : '';
+      const rowSegment = detectedColumns.segment ? String(row[detectedColumns.segment] ?? '') : '';
+
+      if (selectedDate !== 'All' && rowDate !== selectedDate) return false;
+      if (selectedRegion !== 'All' && rowRegion !== selectedRegion) return false;
+      if (selectedCategory !== 'All' && rowCategory !== selectedCategory) return false;
+      if (selectedSegment !== 'All' && rowSegment !== selectedSegment) return false;
+      return true;
+    });
+  }, [
+    data,
+    detectedColumns,
+    selectedDate,
+    selectedRegion,
+    selectedCategory,
+    selectedSegment,
+  ]);
+
+  const executiveData = useMemo(() => {
+    const revenueKey = detectedColumns.revenue;
+    const profitKey = detectedColumns.profit;
+    const ordersKey = detectedColumns.orders;
+    const categoryKey = detectedColumns.category;
+    const regionKey = detectedColumns.region;
+    const productKey = detectedColumns.product;
+    const segmentKey = detectedColumns.segment;
+    const discountKey = detectedColumns.discount;
+
+    const monthlyMap = new Map<string, number>();
+    const categoryMap = new Map<string, { sales: number; profit: number }>();
+    const regionMap = new Map<string, number>();
+    const productMap = new Map<string, number>();
+    const segmentMap = new Map<string, number>();
+    const discountImpact: Array<{ discount: number; profit: number }> = [];
+
+    const fallbackPeriods = buildBucketSeries(filteredRows);
+
+    let totalRevenue = 0;
+    let totalProfit = 0;
+    let totalOrders = 0;
+
+    filteredRows.forEach((row, idx) => {
+      const revenue = revenueKey ? parseNumeric(row[revenueKey]) : 0;
+      const profit = profitKey ? parseNumeric(row[profitKey]) : revenue * 0.2;
+      const orders = ordersKey ? parseNumeric(row[ordersKey]) : 1;
+      const monthLabel = detectedColumns.date
+        ? toMonthLabel(row[detectedColumns.date]) ?? fallbackPeriods[idx]
+        : fallbackPeriods[idx];
+
+      totalRevenue += revenue;
+      totalProfit += profit;
+      totalOrders += orders;
+
+      monthlyMap.set(monthLabel, (monthlyMap.get(monthLabel) ?? 0) + revenue);
+
+      const category = categoryKey ? String(row[categoryKey] ?? 'Unknown') : 'Unknown';
+      const catAgg = categoryMap.get(category) ?? { sales: 0, profit: 0 };
+      catAgg.sales += revenue;
+      catAgg.profit += profit;
+      categoryMap.set(category, catAgg);
+
+      const region = regionKey ? String(row[regionKey] ?? 'Unknown') : 'Unknown';
+      regionMap.set(region, (regionMap.get(region) ?? 0) + revenue);
+
+      const product = productKey ? String(row[productKey] ?? 'Unknown') : `Product ${idx + 1}`;
+      productMap.set(product, (productMap.get(product) ?? 0) + revenue);
+
+      const segment = segmentKey ? String(row[segmentKey] ?? 'Unknown') : 'All Customers';
+      segmentMap.set(segment, (segmentMap.get(segment) ?? 0) + 1);
+
+      if (discountKey) {
+        const discount = parseNumeric(row[discountKey]);
+        if (Number.isFinite(discount) && Number.isFinite(profit)) {
+          discountImpact.push({ discount, profit });
+        }
+      }
+    });
+
+    const monthlyRevenue = Array.from(monthlyMap.entries())
+      .map(([month, revenue]) => ({ month, revenue }))
+      .sort((a, b) => a.month.localeCompare(b.month));
+
+    const previous = monthlyRevenue.length > 1 ? monthlyRevenue[monthlyRevenue.length - 2].revenue : 0;
+    const latest = monthlyRevenue.length > 0 ? monthlyRevenue[monthlyRevenue.length - 1].revenue : 0;
+    const growthRate = previous > 0 ? ((latest - previous) / previous) * 100 : 0;
+
+    const categoryPerformance = Array.from(categoryMap.entries())
+      .map(([category, values]) => ({ category, sales: values.sales, profit: values.profit }))
+      .sort((a, b) => b.sales - a.sales)
+      .slice(0, 10);
+
+    const regionalPerformance = Array.from(regionMap.entries())
+      .map(([region, sales]) => ({ region, sales }))
+      .sort((a, b) => b.sales - a.sales)
+      .slice(0, 10);
+
+    const topProducts = Array.from(productMap.entries())
+      .map(([product, sales]) => ({ product, sales }))
+      .sort((a, b) => b.sales - a.sales)
+      .slice(0, 10);
+
+    const customerSegments = Array.from(segmentMap.entries())
+      .map(([segment, count]) => ({ segment, count }))
+      .sort((a, b) => b.count - a.count);
+
+    return {
+      totalRevenue,
+      totalProfit,
+      totalOrders,
+      growthRate,
+      monthlyRevenue,
+      categoryPerformance,
+      regionalPerformance,
+      topProducts,
+      customerSegments,
+      discountImpact: discountImpact.slice(0, 500),
+    };
+  }, [filteredRows, detectedColumns]);
+
   const downloadCleanedCSV = () => {
     if (!data || data.length === 0) return;
     const headers = Object.keys(data[0]).join(',');
@@ -34,6 +271,57 @@ export const Dashboard: React.FC<DashboardProps> = ({ analysis, onReset, data })
     document.body.removeChild(link);
   };
 
+  const downloadPDF = async () => {
+    if (!visualizationsRef.current || isGeneratingPDF) return;
+    
+    setIsGeneratingPDF(true);
+    
+    try {
+      const element = visualizationsRef.current;
+      const canvas = await html2canvas(element, {
+        scale: 2,
+        useCORS: true,
+        logging: false,
+        backgroundColor: '#f8fafc'
+      });
+      
+      const imgData = canvas.toDataURL('image/png');
+      const pdf = new jsPDF({
+        orientation: 'portrait',
+        unit: 'mm',
+        format: 'a4'
+      });
+      
+      const pdfWidth = pdf.internal.pageSize.getWidth();
+      const pdfHeight = pdf.internal.pageSize.getHeight();
+      const imgWidth = canvas.width;
+      const imgHeight = canvas.height;
+      const ratio = Math.min(pdfWidth / imgWidth, pdfHeight / imgHeight);
+      const imgX = (pdfWidth - imgWidth * ratio) / 2;
+      
+      let heightLeft = imgHeight * ratio;
+      let position = 0;
+      
+      pdf.addImage(imgData, 'PNG', imgX, position, imgWidth * ratio, imgHeight * ratio);
+      heightLeft -= pdfHeight;
+      
+      while (heightLeft > 0) {
+        position = heightLeft - imgHeight * ratio;
+        pdf.addPage();
+        pdf.addImage(imgData, 'PNG', imgX, position, imgWidth * ratio, imgHeight * ratio);
+        heightLeft -= pdfHeight;
+      }
+      
+      const sanitizedFileName = fileName.replace(/[^a-z0-9_-]/gi, '_');
+      pdf.save(`${sanitizedFileName}_overview_report.pdf`);
+    } catch (error) {
+      console.error('Error generating PDF:', error);
+      alert('Failed to generate PDF. Please try again.');
+    } finally {
+      setIsGeneratingPDF(false);
+    }
+  };
+
   const SectionHeader = ({ icon: Icon, title, subtitle }: { icon: any, title: string, subtitle: string }) => (
     <div className="flex items-start gap-4 mb-8">
       <div className="p-3 bg-slate-900 rounded-xl">
@@ -46,196 +334,440 @@ export const Dashboard: React.FC<DashboardProps> = ({ analysis, onReset, data })
     </div>
   );
 
-  const CustomTooltip = ({ active, payload, label }: any) => {
-    if (active && payload && payload.length) {
+  const formatCurrency = (value: number) => {
+    return new Intl.NumberFormat('en-US', {
+      style: 'currency',
+      currency: 'USD',
+      maximumFractionDigits: 0,
+    }).format(value);
+  };
+
+  const formatNumber = (value: number) => {
+    return new Intl.NumberFormat('en-US', {
+      maximumFractionDigits: 0,
+    }).format(value);
+  };
+
+  // ---------------------------------------------------------------------------
+  // DynamicChart — selects the right Recharts component based on chartMeta.type
+  // ---------------------------------------------------------------------------
+  const PIE_COLORS = ['#0f172a', '#14b8a6', '#3b82f6', '#f59e0b', '#ef4444', '#8b5cf6', '#ec4899'];
+  const BAR_COLORS = ['#0f172a', '#14b8a6', '#3b82f6'];
+  const LINE_COLORS = ['#0f172a', '#64748b', '#14b8a6'];
+  const axisStyle = { fill: '#94a3b8', fontSize: 11, fontWeight: 600 } as const;
+  const gridProps = { strokeDasharray: '3 3', stroke: '#f1f5f9' } as const;
+
+  const capitalize = (s: string) => s.charAt(0).toUpperCase() + s.slice(1);
+
+  const DynamicChart = ({
+    data,
+    meta,
+    height = 320,
+    emptyMessage = 'No data available.',
+  }: {
+    data: any[];
+    meta: ChartMeta;
+    height?: number;
+    emptyMessage?: string;
+  }) => {
+    if (!data || data.length === 0) {
       return (
-        <div className="bg-white p-4 rounded-xl border border-slate-200 shadow-lg">
-          <p className="text-xs font-bold text-slate-900 mb-2">{label}</p>
-          {payload.map((entry: any, index: number) => (
-            <p key={index} className="text-sm font-semibold" style={{ color: entry.color }}>
-              {entry.name}: <span className="font-black">{typeof entry.value === 'number' ? entry.value.toFixed(2) : entry.value}</span>
-            </p>
-          ))}
+        <div className="flex items-center justify-center h-full text-sm text-slate-400">
+          {emptyMessage}
         </div>
       );
     }
-    return null;
-  };
+    const fmtValue = meta.valueType === 'currency' ? formatCurrency : formatNumber;
+    const tickFmt = (v: number) => fmtValue(v);
 
-  const renderCustomLabel = (props: any) => {
-    const { x, y, width, value } = props;
+    if (meta.type === 'pie') {
+      return (
+        <ResponsiveContainer width="100%" height={height}>
+          <PieChart>
+            <Pie
+              data={data}
+              dataKey={meta.yKeys[0]}
+              nameKey={meta.xKey}
+              cx="50%"
+              cy="45%"
+              outerRadius={Math.min(height / 2 - 40, 120)}
+              label={({ name, percent }) =>
+                `${String(name).length > 12 ? String(name).slice(0, 12) + '…' : name} ${
+                  (percent * 100).toFixed(0)
+                }%`
+              }
+              labelLine={false}
+            >
+              {data.map((_, i) => (
+                <Cell key={i} fill={PIE_COLORS[i % PIE_COLORS.length]} />
+              ))}
+            </Pie>
+            <Tooltip formatter={(v: number) => fmtValue(v)} />
+            <Legend wrapperStyle={{ fontSize: 11, fontWeight: 600, color: '#94a3b8' }} />
+          </PieChart>
+        </ResponsiveContainer>
+      );
+    }
+
+    if (meta.type === 'bar_horizontal') {
+      const maxLabelLen = Math.max(...data.map(d => String(d[meta.xKey] ?? '').length));
+      const yAxisWidth = Math.min(Math.max(80, maxLabelLen * 7), 200);
+      return (
+        <ResponsiveContainer width="100%" height={height}>
+          <BarChart data={data} layout="vertical" margin={{ left: 10 }}>
+            <CartesianGrid {...gridProps} horizontal={false} />
+            <XAxis type="number" axisLine={false} tickLine={false} tick={axisStyle} tickFormatter={tickFmt} />
+            <YAxis type="category" dataKey={meta.xKey} axisLine={false} tickLine={false} width={yAxisWidth} tick={axisStyle} />
+            <Tooltip formatter={(v: number) => fmtValue(v)} />
+            {meta.yKeys.map((key, i) => (
+              <Bar key={key} dataKey={key} name={capitalize(key)} fill={BAR_COLORS[i] ?? '#0f172a'} radius={[0, 4, 4, 0]} />
+            ))}
+          </BarChart>
+        </ResponsiveContainer>
+      );
+    }
+
+    if (meta.type === 'line') {
+      return (
+        <ResponsiveContainer width="100%" height={height}>
+          <LineChart data={data}>
+            <CartesianGrid {...gridProps} vertical={false} />
+            <XAxis dataKey={meta.xKey} axisLine={false} tickLine={false} tick={axisStyle} />
+            <YAxis axisLine={false} tickLine={false} tick={axisStyle} tickFormatter={tickFmt} />
+            <Tooltip formatter={(v: number) => fmtValue(v)} />
+            {meta.yKeys.map((key, i) => (
+              <Line key={key} type="monotone" dataKey={key} name={capitalize(key)} stroke={LINE_COLORS[i] ?? '#0f172a'} strokeWidth={3} dot={false} />
+            ))}
+          </LineChart>
+        </ResponsiveContainer>
+      );
+    }
+
+    // default: vertical bar
     return (
-      <text 
-        x={x + width / 2} 
-        y={y - 10} 
-        fill="#0f172a" 
-        textAnchor="middle" 
-        className="text-xs font-bold"
-      >
-        {typeof value === 'number' ? value.toFixed(1) : value}
-      </text>
+      <ResponsiveContainer width="100%" height={height}>
+        <BarChart data={data}>
+          <CartesianGrid {...gridProps} vertical={false} />
+          <XAxis dataKey={meta.xKey} axisLine={false} tickLine={false} tick={axisStyle} />
+          <YAxis axisLine={false} tickLine={false} tick={axisStyle} tickFormatter={tickFmt} />
+          <Tooltip formatter={(v: number) => fmtValue(v)} />
+          {meta.yKeys.map((key, i) => (
+            <Bar key={key} dataKey={key} name={capitalize(key)} fill={BAR_COLORS[i] ?? '#0f172a'} radius={[4, 4, 0, 0]} />
+          ))}
+        </BarChart>
+      </ResponsiveContainer>
     );
   };
 
-  const renderPieLabel = (entry: any) => {
-    return `${entry.name}: ${entry.value}`;
+  // Dataset-driven fallback metadata: if backend metadata is missing, infer chart type from data shape.
+  type ExecutiveChartKey = 'profitLoss' | 'revenueExpenses' | 'salesByCategory' | 'regionalPerformance' | 'topProducts';
+
+  const BASE_CHART_META: Record<ExecutiveChartKey, Omit<ChartMeta, 'type'>> = {
+    profitLoss:          { xKey: 'period',   yKeys: ['profit', 'loss'],      valueType: 'currency' },
+    revenueExpenses:     { xKey: 'period',   yKeys: ['revenue', 'expenses'], valueType: 'currency' },
+    salesByCategory:     { xKey: 'category', yKeys: ['sales'],               valueType: 'currency' },
+    regionalPerformance: { xKey: 'region',   yKeys: ['sales', 'profit'],     valueType: 'currency' },
+    topProducts:         { xKey: 'product',  yKeys: ['sales', 'profit'],     valueType: 'currency' },
+  };
+
+  const inferChartType = (
+    chartKey: ExecutiveChartKey,
+    rows: any[],
+    yKeys: string[],
+    xKey: string,
+  ): ChartMeta['type'] => {
+    const points = rows.length;
+    const metrics = yKeys.length;
+    const avgLabelLength = points > 0
+      ? rows.reduce((sum, row) => sum + String(row?.[xKey] ?? '').length, 0) / points
+      : 0;
+
+    // Time-based trend: line for richer sequences, bar for short snapshots.
+    if (chartKey === 'revenueExpenses') {
+      return points > 6 ? 'line' : 'bar';
+    }
+
+    // Ranked lists with one metric: pie for compact part-to-whole, else horizontal bars.
+    if (chartKey === 'salesByCategory' && metrics === 1) {
+      return points > 0 && points <= 6 ? 'pie' : 'bar_horizontal';
+    }
+
+    // Product rankings and long labels are easier to scan horizontally.
+    if (chartKey === 'topProducts' || points > 10 || avgLabelLength > 12) {
+      return 'bar_horizontal';
+    }
+
+    return 'bar';
+  };
+
+  const resolveChartMeta = (chartKey: ExecutiveChartKey, rows: any[]): ChartMeta => {
+    const backendMeta = executive.chartMeta?.[chartKey];
+    if (backendMeta) {
+      return backendMeta;
+    }
+    const base = BASE_CHART_META[chartKey];
+    return {
+      ...base,
+      type: inferChartType(chartKey, rows, base.yKeys, base.xKey),
+    };
+  };
+
+  const chartMeta = {
+    profitLoss: resolveChartMeta('profitLoss', executive.profitLoss),
+    revenueExpenses: resolveChartMeta('revenueExpenses', executive.revenueExpenses),
+    salesByCategory: resolveChartMeta('salesByCategory', executive.salesByCategory),
+    regionalPerformance: resolveChartMeta('regionalPerformance', executive.regionalPerformance),
+    topProducts: resolveChartMeta('topProducts', executive.topProducts),
   };
 
   return (
     <div className="space-y-12 animate-in fade-in duration-700 bg-slate-50 -mx-6 px-6 py-12">
+      {/* Visualizations Section for PDF Export */}
+      <div ref={visualizationsRef}>
       {/* BI Command Center Header */}
       <div className="flex items-center justify-between mb-8 bg-white p-6 rounded-2xl border border-slate-200 shadow-sm">
         <div className="flex items-center gap-4">
           <LayoutIcon className="w-5 h-5 text-slate-400" />
-          <h2 className="text-lg font-bold text-slate-800 tracking-tight uppercase">Executive BI Canvas</h2>
+          <div>
+            <h2 className="text-lg font-bold text-slate-800 tracking-tight uppercase">Executive BI Canvas</h2>
+            <p className="text-xs text-slate-500 font-semibold mt-0.5">
+              Visualization is always chosen according to the data type and the analysis goal,
+              so every chart matches the data and delivers clear insights.
+            </p>
+          </div>
         </div>
         <div className="flex gap-2">
           <button className="p-2 hover:bg-slate-50 rounded-lg text-slate-400"><Filter className="w-4 h-4" /></button>
           <button className="p-2 hover:bg-slate-50 rounded-lg text-slate-400"><Share2 className="w-4 h-4" /></button>
           <button 
+            onClick={downloadPDF}
+            disabled={isGeneratingPDF}
+            className="flex items-center gap-2 px-3 py-1.5 hover:bg-slate-50 border border-slate-200 rounded-lg text-slate-600 text-xs font-bold transition-all disabled:opacity-50 disabled:cursor-not-allowed"
+            title="Download insights report as PDF"
+          >
+            {isGeneratingPDF ? (
+              <><Loader2 className="w-4 h-4 animate-spin" /> GENERATING...</>
+            ) : (
+              <><FileDown className="w-4 h-4" /> DOWNLOAD PDF</>
+            )}
+          </button>
+          <button 
             onClick={downloadCleanedCSV}
             className="flex items-center gap-2 px-3 py-1.5 hover:bg-slate-50 border border-slate-200 rounded-lg text-slate-600 text-xs font-bold transition-all"
             title="Export the cleaned dataset used for these insights"
           >
-            <Download className="w-4 h-4" /> EXPORT CLEAN DATA
+            <Download className="w-4 h-4" /> EXPORT DATA
           </button>
           <button onClick={onReset} className="ml-4 px-4 py-2 bg-slate-900 text-white rounded-lg text-xs font-bold hover:bg-slate-800 transition-all">NEW ANALYSIS</button>
         </div>
       </div>
 
-      {/* Metric Tiles Tier (Power BI Cards) */}
-      <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4">
-        {analysis.descriptive.kpis.map((kpi, idx) => (
-          <div key={idx} className="bg-white p-6 rounded-2xl border border-slate-200 shadow-sm hover:shadow-md transition-shadow">
-            <p className="text-xs font-bold text-slate-400 uppercase tracking-widest mb-3">{kpi.label}</p>
-            <div className="flex items-end justify-between">
-              <div>
-                <span className="text-3xl font-black text-slate-900">{kpi.value}</span>
-                {kpi.change && (
-                  <div className={`flex items-center text-xs font-bold mt-2 ${kpi.trend === 'up' ? 'text-emerald-600' : kpi.trend === 'down' ? 'text-rose-600' : 'text-slate-400'}`}>
-                    {kpi.trend === 'up' ? <ArrowUpRight className="w-3 h-3 mr-1" /> : <ArrowDownRight className="w-3 h-3 mr-1" />}
-                    {kpi.change}
-                  </div>
-                )}
-              </div>
-              <div className="w-16 h-8 opacity-20">
-                <ResponsiveContainer width="100%" height="100%">
-                  <AreaChart data={analysis.biOverview.trend.slice(-5)}>
-                    <Area type="monotone" dataKey="value" stroke={kpi.trend === 'up' ? '#10b981' : '#f43f5e'} fill={kpi.trend === 'up' ? '#10b981' : '#f43f5e'} />
-                  </AreaChart>
-                </ResponsiveContainer>
-              </div>
-            </div>
-          </div>
-        ))}
+      {/* Interactive Filters */}
+      <div className="grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-4 gap-4 mb-4">
+        <div className="bg-white p-4 rounded-2xl border border-slate-200 shadow-sm">
+          <p className="text-[10px] font-bold text-slate-400 uppercase tracking-[0.15em] mb-2">Date</p>
+          <select value={selectedDate} onChange={(e) => setSelectedDate(e.target.value)} className="w-full border border-slate-200 rounded-lg px-3 py-2 text-sm text-slate-700 bg-white">
+            <option value="All">All</option>
+            {filterOptions.dates.map((d) => <option key={d} value={d}>{d}</option>)}
+          </select>
+        </div>
+        <div className="bg-white p-4 rounded-2xl border border-slate-200 shadow-sm">
+          <p className="text-[10px] font-bold text-slate-400 uppercase tracking-[0.15em] mb-2">Region</p>
+          <select value={selectedRegion} onChange={(e) => setSelectedRegion(e.target.value)} className="w-full border border-slate-200 rounded-lg px-3 py-2 text-sm text-slate-700 bg-white">
+            <option value="All">All</option>
+            {filterOptions.regions.map((r) => <option key={r} value={r}>{r}</option>)}
+          </select>
+        </div>
+        <div className="bg-white p-4 rounded-2xl border border-slate-200 shadow-sm">
+          <p className="text-[10px] font-bold text-slate-400 uppercase tracking-[0.15em] mb-2">Category</p>
+          <select value={selectedCategory} onChange={(e) => setSelectedCategory(e.target.value)} className="w-full border border-slate-200 rounded-lg px-3 py-2 text-sm text-slate-700 bg-white">
+            <option value="All">All</option>
+            {filterOptions.categories.map((c) => <option key={c} value={c}>{c}</option>)}
+          </select>
+        </div>
+        <div className="bg-white p-4 rounded-2xl border border-slate-200 shadow-sm">
+          <p className="text-[10px] font-bold text-slate-400 uppercase tracking-[0.15em] mb-2">Segment</p>
+          <select value={selectedSegment} onChange={(e) => setSelectedSegment(e.target.value)} className="w-full border border-slate-200 rounded-lg px-3 py-2 text-sm text-slate-700 bg-white">
+            <option value="All">All</option>
+            {filterOptions.segments.map((s) => <option key={s} value={s}>{s}</option>)}
+          </select>
+        </div>
       </div>
 
-      {/* Visual Canvas Tier */}
-      <div className="grid grid-cols-1 lg:grid-cols-12 gap-6">
-        <div className="lg:col-span-8 bg-white p-8 rounded-3xl border border-slate-200 shadow-sm">
-          <div className="flex items-center justify-between mb-8">
-            <h4 className="text-sm font-bold text-slate-800 uppercase tracking-widest">Performance Momentum</h4>
-            <Maximize2 className="w-4 h-4 text-slate-300" />
+      {/* KPI Summary */}
+      <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4">
+        <div className="bg-white p-6 rounded-2xl border border-slate-200 shadow-sm">
+          <p className="text-xs font-bold text-slate-400 uppercase tracking-widest mb-3">Total Revenue</p>
+          <p className="text-3xl font-black text-slate-900">{formatCurrency(executiveData.totalRevenue)}</p>
+        </div>
+        <div className="bg-white p-6 rounded-2xl border border-slate-200 shadow-sm">
+          <p className="text-xs font-bold text-slate-400 uppercase tracking-widest mb-3">Total Profit</p>
+          <p className="text-3xl font-black text-slate-900">{formatCurrency(executiveData.totalProfit)}</p>
+        </div>
+        <div className="bg-white p-6 rounded-2xl border border-slate-200 shadow-sm">
+          <p className="text-xs font-bold text-slate-400 uppercase tracking-widest mb-3">Total Orders</p>
+          <p className="text-3xl font-black text-slate-900">{formatNumber(executiveData.totalOrders)}</p>
+        </div>
+        <div className="bg-white p-6 rounded-2xl border border-slate-200 shadow-sm">
+          <p className="text-xs font-bold text-slate-400 uppercase tracking-widest mb-3">Growth Rate</p>
+          <div className="flex items-center gap-2">
+            {executiveData.growthRate >= 0 ? (
+              <ArrowUpRight className="w-5 h-5 text-emerald-600" />
+            ) : (
+              <ArrowDownRight className="w-5 h-5 text-rose-600" />
+            )}
+            <p className={`text-3xl font-black ${executiveData.growthRate >= 0 ? 'text-emerald-700' : 'text-rose-700'}`}>
+              {executiveData.growthRate.toFixed(1)}%
+            </p>
           </div>
-          <div className="h-[350px]">
-            <ResponsiveContainer width="100%" height="100%">
-              <AreaChart data={analysis.biOverview.trend}>
-                <defs>
-                  <linearGradient id="colorTrend" x1="0" y1="0" x2="0" y2="1">
-                    <stop offset="5%" stopColor="#0f172a" stopOpacity={0.1}/>
-                    <stop offset="95%" stopColor="#0f172a" stopOpacity={0}/>
-                  </linearGradient>
-                </defs>
-                <CartesianGrid strokeDasharray="3 3" vertical={false} stroke="#f1f5f9" />
-                <XAxis 
-                  dataKey="name" 
-                  axisLine={false} 
-                  tickLine={false} 
-                  tick={{fill: '#94a3b8', fontSize: 11, fontWeight: 600}} 
-                  label={{ value: 'Time Period', position: 'insideBottom', offset: -5, style: { fill: '#64748b', fontSize: 10, fontWeight: 700 } }}
-                />
-                <YAxis 
-                  axisLine={false} 
-                  tickLine={false} 
-                  tick={{fill: '#94a3b8', fontSize: 11, fontWeight: 600}}
-                  label={{ value: 'Value', angle: -90, position: 'insideLeft', style: { fill: '#64748b', fontSize: 10, fontWeight: 700 } }}
-                />
-                <Tooltip content={<CustomTooltip />} />
-                <Area 
-                  type="monotone" 
-                  dataKey="value" 
-                  stroke="#0f172a" 
-                  fillOpacity={1} 
-                  fill="url(#colorTrend)" 
-                  strokeWidth={3}
-                >
-                  <LabelList dataKey="value" position="top" style={{ fill: '#0f172a', fontSize: 11, fontWeight: 700 }} formatter={(value: number) => value.toFixed(1)} />
-                </Area>
-              </AreaChart>
-            </ResponsiveContainer>
+        </div>
+      </div>
+
+      {/* Executive Visual Sections */}
+      <div className="grid grid-cols-1 lg:grid-cols-12 gap-6 mt-2">
+        <div className="lg:col-span-12 bg-white p-8 rounded-3xl border border-slate-200 shadow-sm">
+          <h4 className="text-sm font-bold text-slate-800 uppercase tracking-widest mb-6">Revenue Trend (Monthly)</h4>
+          <div className="h-[320px]">
+            {executiveData.monthlyRevenue.length === 0 ? (
+              <div className="flex items-center justify-center h-full text-sm text-slate-400">No revenue trend data available.</div>
+            ) : (
+              <ResponsiveContainer width="100%" height="100%">
+                <LineChart data={executiveData.monthlyRevenue}>
+                  <CartesianGrid strokeDasharray="3 3" vertical={false} stroke="#f1f5f9" />
+                  <XAxis dataKey="month" axisLine={false} tickLine={false} tick={{ fill: '#94a3b8', fontSize: 11, fontWeight: 600 }} />
+                  <YAxis axisLine={false} tickLine={false} tick={{ fill: '#94a3b8', fontSize: 11, fontWeight: 600 }} tickFormatter={(v) => formatNumber(Number(v))} />
+                  <Tooltip formatter={(v: number) => formatCurrency(Number(v))} />
+                  <Line type="monotone" dataKey="revenue" name="Revenue" stroke="#0f172a" strokeWidth={3} dot={false} />
+                </LineChart>
+              </ResponsiveContainer>
+            )}
           </div>
         </div>
 
-        <div className="lg:col-span-4 bg-white p-8 rounded-3xl border border-slate-200 shadow-sm flex flex-col">
-          <div className="flex items-center justify-between mb-8">
-            <h4 className="text-sm font-bold text-slate-800 uppercase tracking-widest">Category Split</h4>
+        <div className="lg:col-span-6 bg-white p-8 rounded-3xl border border-slate-200 shadow-sm">
+          <h4 className="text-sm font-bold text-slate-800 uppercase tracking-widest mb-6">Category Performance: Sales by Category</h4>
+          <div className="h-[320px]">
+            {executiveData.categoryPerformance.length === 0 ? (
+              <div className="flex items-center justify-center h-full text-sm text-slate-400">No category sales data available.</div>
+            ) : (
+              <ResponsiveContainer width="100%" height="100%">
+                <BarChart data={executiveData.categoryPerformance}>
+                  <CartesianGrid strokeDasharray="3 3" vertical={false} stroke="#f1f5f9" />
+                  <XAxis dataKey="category" axisLine={false} tickLine={false} tick={{ fill: '#94a3b8', fontSize: 11, fontWeight: 600 }} />
+                  <YAxis axisLine={false} tickLine={false} tick={{ fill: '#94a3b8', fontSize: 11, fontWeight: 600 }} tickFormatter={(v) => formatNumber(Number(v))} />
+                  <Tooltip formatter={(v: number) => formatCurrency(Number(v))} />
+                  <Bar dataKey="sales" fill="#0f172a" radius={[4, 4, 0, 0]} />
+                </BarChart>
+              </ResponsiveContainer>
+            )}
           </div>
-          <div className="flex-1 h-[250px]">
-            <ResponsiveContainer width="100%" height="100%">
-              <PieChart>
-                <Pie
-                  data={analysis.biOverview.composition}
-                  innerRadius={60}
-                  outerRadius={100}
-                  paddingAngle={5}
-                  dataKey="value"
-                  label={(entry) => `${entry.name}: ${entry.value}`}
-                  labelLine={{ stroke: '#94a3b8', strokeWidth: 1 }}
-                >
-                  {analysis.biOverview.composition.map((entry, index) => (
-                    <Cell key={`cell-${index}`} fill={COLORS[index % COLORS.length]} />
-                  ))}
-                </Pie>
-                <Tooltip content={<CustomTooltip />} />
-                <Legend 
-                  iconType="circle" 
-                  wrapperStyle={{ fontSize: '12px', fontWeight: 600 }}
-                  formatter={(value, entry: any) => `${value} (${entry.payload.value})`}
-                />
-              </PieChart>
-            </ResponsiveContainer>
+        </div>
+
+        <div className="lg:col-span-6 bg-white p-8 rounded-3xl border border-slate-200 shadow-sm">
+          <h4 className="text-sm font-bold text-slate-800 uppercase tracking-widest mb-6">Category Performance: Profit by Category</h4>
+          <div className="h-[320px]">
+            {executiveData.categoryPerformance.length === 0 ? (
+              <div className="flex items-center justify-center h-full text-sm text-slate-400">No category profit data available.</div>
+            ) : (
+              <ResponsiveContainer width="100%" height="100%">
+                <BarChart data={executiveData.categoryPerformance}>
+                  <CartesianGrid strokeDasharray="3 3" vertical={false} stroke="#f1f5f9" />
+                  <XAxis dataKey="category" axisLine={false} tickLine={false} tick={{ fill: '#94a3b8', fontSize: 11, fontWeight: 600 }} />
+                  <YAxis axisLine={false} tickLine={false} tick={{ fill: '#94a3b8', fontSize: 11, fontWeight: 600 }} tickFormatter={(v) => formatNumber(Number(v))} />
+                  <Tooltip formatter={(v: number) => formatCurrency(Number(v))} />
+                  <Bar dataKey="profit" fill="#14b8a6" radius={[4, 4, 0, 0]} />
+                </BarChart>
+              </ResponsiveContainer>
+            )}
+          </div>
+        </div>
+
+        <div className="lg:col-span-6 bg-white p-8 rounded-3xl border border-slate-200 shadow-sm">
+          <h4 className="text-sm font-bold text-slate-800 uppercase tracking-widest mb-6">Regional Performance: Sales by Region</h4>
+          <div className="h-[320px]">
+            {executiveData.regionalPerformance.length === 0 ? (
+              <div className="flex items-center justify-center h-full text-sm text-slate-400">No regional sales data available.</div>
+            ) : (
+              <ResponsiveContainer width="100%" height="100%">
+                <BarChart data={executiveData.regionalPerformance}>
+                  <CartesianGrid strokeDasharray="3 3" vertical={false} stroke="#f1f5f9" />
+                  <XAxis dataKey="region" axisLine={false} tickLine={false} tick={{ fill: '#94a3b8', fontSize: 11, fontWeight: 600 }} />
+                  <YAxis axisLine={false} tickLine={false} tick={{ fill: '#94a3b8', fontSize: 11, fontWeight: 600 }} tickFormatter={(v) => formatNumber(Number(v))} />
+                  <Tooltip formatter={(v: number) => formatCurrency(Number(v))} />
+                  <Bar dataKey="sales" fill="#334155" radius={[4, 4, 0, 0]} />
+                </BarChart>
+              </ResponsiveContainer>
+            )}
+          </div>
+        </div>
+
+        <div className="lg:col-span-6 bg-white p-8 rounded-3xl border border-slate-200 shadow-sm">
+          <h4 className="text-sm font-bold text-slate-800 uppercase tracking-widest mb-6">Customer Insights: Segment Mix</h4>
+          <div className="h-[320px]">
+            {executiveData.customerSegments.length === 0 ? (
+              <div className="flex items-center justify-center h-full text-sm text-slate-400">No customer segment data available.</div>
+            ) : (
+              <ResponsiveContainer width="100%" height="100%">
+                <PieChart>
+                  <Pie
+                    data={executiveData.customerSegments}
+                    dataKey="count"
+                    nameKey="segment"
+                    innerRadius={70}
+                    outerRadius={110}
+                    paddingAngle={2}
+                  >
+                    {executiveData.customerSegments.map((_, i) => (
+                      <Cell key={i} fill={['#0f172a', '#14b8a6', '#3b82f6', '#f59e0b', '#ef4444', '#8b5cf6'][i % 6]} />
+                    ))}
+                  </Pie>
+                  <Tooltip formatter={(v: number) => formatNumber(Number(v))} />
+                  <Legend wrapperStyle={{ fontSize: 11, fontWeight: 600 }} />
+                </PieChart>
+              </ResponsiveContainer>
+            )}
           </div>
         </div>
 
         <div className="lg:col-span-12 bg-white p-8 rounded-3xl border border-slate-200 shadow-sm">
-          <div className="flex items-center justify-between mb-8">
-            <h4 className="text-sm font-bold text-slate-800 uppercase tracking-widest">Comparative Distribution</h4>
-          </div>
-          <div className="h-[250px]">
-            <ResponsiveContainer width="100%" height="100%">
-              <BarChart data={analysis.biOverview.distribution}>
-                <CartesianGrid strokeDasharray="3 3" vertical={false} stroke="#f1f5f9" />
-                <XAxis 
-                  dataKey="category" 
-                  axisLine={false} 
-                  tickLine={false} 
-                  tick={{fill: '#94a3b8', fontSize: 11, fontWeight: 600}}
-                  label={{ value: 'Categories', position: 'insideBottom', offset: -5, style: { fill: '#64748b', fontSize: 10, fontWeight: 700 } }}
-                />
-                <YAxis 
-                  axisLine={false} 
-                  tickLine={false} 
-                  tick={{fill: '#94a3b8', fontSize: 11, fontWeight: 600}}
-                  label={{ value: 'Count', angle: -90, position: 'insideLeft', style: { fill: '#64748b', fontSize: 10, fontWeight: 700 } }}
-                />
-                <Tooltip content={<CustomTooltip />} cursor={{fill: '#f8fafc'}} />
-                <Bar dataKey="value" fill="#0f172a" radius={[4, 4, 0, 0]} barSize={40}>
-                  <LabelList dataKey="value" position="top" content={renderCustomLabel} />
-                </Bar>
-              </BarChart>
-            </ResponsiveContainer>
+          <h4 className="text-sm font-bold text-slate-800 uppercase tracking-widest mb-6">Product Performance: Top 10 Products by Sales</h4>
+          <div className="h-[340px]">
+            {executiveData.topProducts.length === 0 ? (
+              <div className="flex items-center justify-center h-full text-sm text-slate-400">No product sales data available.</div>
+            ) : (
+              <ResponsiveContainer width="100%" height="100%">
+                <BarChart data={executiveData.topProducts} layout="vertical" margin={{ left: 20 }}>
+                  <CartesianGrid strokeDasharray="3 3" horizontal={false} stroke="#f1f5f9" />
+                  <XAxis type="number" axisLine={false} tickLine={false} tick={{ fill: '#94a3b8', fontSize: 11, fontWeight: 600 }} tickFormatter={(v) => formatNumber(Number(v))} />
+                  <YAxis type="category" dataKey="product" axisLine={false} tickLine={false} width={140} tick={{ fill: '#94a3b8', fontSize: 11, fontWeight: 600 }} />
+                  <Tooltip formatter={(v: number) => formatCurrency(Number(v))} />
+                  <Bar dataKey="sales" fill="#0f172a" radius={[0, 4, 4, 0]} />
+                </BarChart>
+              </ResponsiveContainer>
+            )}
           </div>
         </div>
+
+        <div className="lg:col-span-12 bg-white p-8 rounded-3xl border border-slate-200 shadow-sm">
+          <h4 className="text-sm font-bold text-slate-800 uppercase tracking-widest mb-6">Discount Impact Analysis: Discount vs Profit</h4>
+          <div className="h-[340px]">
+            {executiveData.discountImpact.length === 0 ? (
+              <div className="flex items-center justify-center h-full text-sm text-slate-400">No discount and profit columns available for scatter analysis.</div>
+            ) : (
+              <ResponsiveContainer width="100%" height="100%">
+                <ScatterChart margin={{ top: 10, right: 20, bottom: 10, left: 10 }}>
+                  <CartesianGrid strokeDasharray="3 3" stroke="#f1f5f9" />
+                  <XAxis type="number" dataKey="discount" name="Discount" axisLine={false} tickLine={false} tick={{ fill: '#94a3b8', fontSize: 11, fontWeight: 600 }} />
+                  <YAxis type="number" dataKey="profit" name="Profit" axisLine={false} tickLine={false} tick={{ fill: '#94a3b8', fontSize: 11, fontWeight: 600 }} tickFormatter={(v) => formatNumber(Number(v))} />
+                  <Tooltip cursor={{ strokeDasharray: '3 3' }} formatter={(v: number, name: string) => name === 'Discount' ? `${Number(v).toFixed(2)}%` : formatCurrency(Number(v))} />
+                  <Scatter name="Discount vs Profit" data={executiveData.discountImpact} fill="#0f172a" />
+                </ScatterChart>
+              </ResponsiveContainer>
+            )}
+          </div>
+        </div>
+
+      </div>
       </div>
 
       {/* Narrative Section */}
