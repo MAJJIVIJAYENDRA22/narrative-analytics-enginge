@@ -198,7 +198,7 @@ Final report and cleaned dataset are available for download.
 
 **Installation**
 Clone the repository
-git clone https://github.com/yourusername/narrative-analytics-engine.git
+git clone: https://github.com/MAJJIVIJAYENDRA22/narrative-analytics-enginge.git
 Navigate to the project directory
 cd narrative-analytics-engine
 Install dependencies
