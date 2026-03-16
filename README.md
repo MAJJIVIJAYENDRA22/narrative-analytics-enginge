@@ -123,7 +123,7 @@ Prescriptive Insights
 
 Overall Summary
 
-Technology Stack
+**Technology Stack**
 
 Frontend
 
