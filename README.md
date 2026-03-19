@@ -170,7 +170,6 @@ Insight Extraction Engine
       ├── Descriptive Insights (with charts)
       ├── Diagnostic Insights
       ├── Predictive Insights
-      └── Prescriptive Insights
       │
       ▼
 Narrative Generation
@@ -217,3 +216,4 @@ Advanced machine learning models
 Natural language query interface
 
 Interactive storytelling dashboards
+
