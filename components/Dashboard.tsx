@@ -1,400 +1,722 @@
-
-import React from 'react';
-import { 
-  BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, 
-  Cell, AreaChart, Area, PieChart, Pie, Legend, Label, LabelList
+import React, { useMemo, useRef, useState } from 'react';
+import {
+  Bar,
+  BarChart,
+  Brush,
+  CartesianGrid,
+  Cell,
+  Legend,
+  Line,
+  LineChart,
+  Pie,
+  PieChart,
+  ResponsiveContainer,
+  Tooltip,
+  XAxis,
+  YAxis,
 } from 'recharts';
-import { AnalysisSummary, DataRow } from '../types';
-import { 
-  TrendingUp, Activity, BarChart2, Lightbulb, 
-  ShieldCheck, AlertCircle, ArrowUpRight, ArrowDownRight,
-  Layout as LayoutIcon, Maximize2, Filter, Share2, Download
+import {
+  ArrowDownWideNarrow,
+  ArrowUpWideNarrow,
+  Download,
+  FileDown,
+  Filter,
+  ImageDown,
+  RefreshCcw,
+  Table,
+  TrendingUp,
 } from 'lucide-react';
+import html2canvas from 'html2canvas';
+import jsPDF from 'jspdf';
+import { AnalysisSummary, DataRow } from '../types';
 
 interface DashboardProps {
   analysis: AnalysisSummary;
   onReset: () => void;
   data: DataRow[];
+  fileName?: string;
 }
 
-const COLORS = ['#1e293b', '#64748b', '#94a3b8', '#cbd5e1', '#f1f5f9'];
+type SortDirection = 'asc' | 'desc';
 
-export const Dashboard: React.FC<DashboardProps> = ({ analysis, onReset, data }) => {
-  const downloadCleanedCSV = () => {
-    if (!data || data.length === 0) return;
-    const headers = Object.keys(data[0]).join(',');
-    const rows = data.map(row => Object.values(row).join(','));
-    const csvContent = "data:text/csv;charset=utf-8," + [headers, ...rows].join("\n");
-    const encodedUri = encodeURI(csvContent);
-    const link = document.createElement("a");
-    link.setAttribute("href", encodedUri);
-    link.setAttribute("download", "narrative_cleaned_data.csv");
-    document.body.appendChild(link);
-    link.click();
-    document.body.removeChild(link);
-  };
+type ChartType = 'bar' | 'line' | 'pie';
 
-  const SectionHeader = ({ icon: Icon, title, subtitle }: { icon: any, title: string, subtitle: string }) => (
-    <div className="flex items-start gap-4 mb-8">
-      <div className="p-3 bg-slate-900 rounded-xl">
-        <Icon className="w-6 h-6 text-white" />
-      </div>
-      <div>
-        <h3 className="text-2xl font-bold text-slate-900 leading-none mb-1">{title}</h3>
-        <p className="text-slate-500 text-sm font-medium">{subtitle}</p>
-      </div>
-    </div>
-  );
+type MetricType = 'number' | 'currency';
 
-  const CustomTooltip = ({ active, payload, label }: any) => {
-    if (active && payload && payload.length) {
-      return (
-        <div className="bg-white p-4 rounded-xl border border-slate-200 shadow-lg">
-          <p className="text-xs font-bold text-slate-900 mb-2">{label}</p>
-          {payload.map((entry: any, index: number) => (
-            <p key={index} className="text-sm font-semibold" style={{ color: entry.color }}>
-              {entry.name}: <span className="font-black">{typeof entry.value === 'number' ? entry.value.toFixed(2) : entry.value}</span>
-            </p>
-          ))}
-        </div>
-      );
+const COLORS = ['#0F172A', '#0E7490', '#1D4ED8', '#B45309', '#BE123C', '#4C1D95'];
+
+const PANEL = 'rounded-2xl border border-slate-200 bg-white shadow-sm';
+const SUBTLE = 'text-sm font-medium text-slate-500';
+
+const normalize = (value: string) => value.toLowerCase().replace(/[^a-z0-9]/g, '');
+
+const parseNumeric = (value: unknown): number => {
+  if (typeof value === 'number') return Number.isFinite(value) ? value : 0;
+  if (typeof value === 'string') {
+    const parsed = Number(value.replace(/[$,%\s,]/g, ''));
+    return Number.isFinite(parsed) ? parsed : 0;
+  }
+  return 0;
+};
+
+const isLikelyDate = (value: unknown): boolean => {
+  if (typeof value !== 'string' && typeof value !== 'number') return false;
+  const d = new Date(value);
+  return !Number.isNaN(d.getTime());
+};
+
+const toMonthLabel = (value: unknown): string | null => {
+  if (!value) return null;
+  const d = new Date(value as string);
+  if (!Number.isNaN(d.getTime())) {
+    return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}`;
+  }
+  if (typeof value === 'string') {
+    const text = value.trim();
+    if (/^\d{4}-\d{2}$/.test(text)) return text;
+    if (/^\d{4}$/.test(text)) return `${text}-01`;
+  }
+  return null;
+};
+
+const toCSVCell = (value: unknown): string => {
+  const text = String(value ?? '');
+  if (/[,"\n]/.test(text)) {
+    return `"${text.replace(/"/g, '""')}"`;
+  }
+  return text;
+};
+
+const metricFormatter = (type: MetricType, value: number): string => {
+  if (type === 'currency') {
+    return new Intl.NumberFormat('en-US', {
+      style: 'currency',
+      currency: 'USD',
+      maximumFractionDigits: 0,
+    }).format(value);
+  }
+  return new Intl.NumberFormat('en-US', {
+    maximumFractionDigits: 2,
+  }).format(value);
+};
+
+const downloadBlob = (content: string, fileName: string, mime: string) => {
+  const blob = new Blob([content], { type: mime });
+  const url = URL.createObjectURL(blob);
+  const link = document.createElement('a');
+  link.href = url;
+  link.download = fileName;
+  document.body.appendChild(link);
+  link.click();
+  document.body.removeChild(link);
+  URL.revokeObjectURL(url);
+};
+
+const inferMetricType = (column?: string): MetricType => {
+  if (!column) return 'number';
+  const candidate = normalize(column);
+  if (candidate.includes('revenue') || candidate.includes('sales') || candidate.includes('profit') || candidate.includes('cost') || candidate.includes('amount') || candidate.includes('price')) {
+    return 'currency';
+  }
+  return 'number';
+};
+
+export const Dashboard: React.FC<DashboardProps> = ({ analysis, onReset, data, fileName = 'report' }) => {
+  const reportRef = useRef<HTMLDivElement>(null);
+  const chartRef = useRef<HTMLDivElement>(null);
+  const [isGeneratingPDF, setIsGeneratingPDF] = useState(false);
+  const [isExportingChart, setIsExportingChart] = useState(false);
+
+  const [globalFilter, setGlobalFilter] = useState('all');
+  const [drillValue, setDrillValue] = useState<string | null>(null);
+  const [sortColumn, setSortColumn] = useState<string>('');
+  const [sortDirection, setSortDirection] = useState<SortDirection>('desc');
+
+  const columns = useMemo(() => (data.length ? Object.keys(data[0]) : []), [data]);
+
+  const columnProfile = useMemo(() => {
+    const sample = data.slice(0, 300);
+
+    const numericColumns = columns.filter((col) => {
+      if (!sample.length) return false;
+      const numericCount = sample.filter((row) => {
+        const value = row[col];
+        if (value === null || value === undefined || value === '') return false;
+        return Number.isFinite(parseNumeric(value));
+      }).length;
+      return numericCount / sample.length >= 0.6;
+    });
+
+    const categoricalColumns = columns.filter((col) => !numericColumns.includes(col));
+
+    const dateColumn = columns.find((col) => {
+      const normalized = normalize(col);
+      if (normalized.includes('date') || normalized.includes('time') || normalized.includes('month') || normalized.includes('year')) {
+        return true;
+      }
+      const values = sample.map((row) => row[col]).filter(Boolean);
+      if (values.length < 5) return false;
+      const dateLike = values.filter((v) => isLikelyDate(v)).length;
+      return dateLike / values.length >= 0.7;
+    });
+
+    const keywordMatch = (keywords: string[]) => {
+      const normalizedKeywords = keywords.map(normalize);
+      return columns.find((col) => normalizedKeywords.some((kw) => normalize(col).includes(kw)));
+    };
+
+    return {
+      numericColumns,
+      categoricalColumns,
+      dateColumn,
+      defaultDimension:
+        dateColumn ?? keywordMatch(['category', 'region', 'segment', 'product']) ?? categoricalColumns[0] ?? columns[0] ?? '',
+      defaultMetric:
+        keywordMatch(['revenue', 'sales', 'profit', 'amount', 'value']) ?? numericColumns[0] ?? '',
+      defaultSecondaryMetric: numericColumns[1] ?? '',
+    };
+  }, [columns, data]);
+
+  const [selectedDimension, setSelectedDimension] = useState<string>('');
+  const [selectedMetric, setSelectedMetric] = useState<string>('');
+  const [selectedSecondaryMetric, setSelectedSecondaryMetric] = useState<string>('');
+
+  React.useEffect(() => {
+    if (!selectedDimension && columnProfile.defaultDimension) setSelectedDimension(columnProfile.defaultDimension);
+    if (!selectedMetric && columnProfile.defaultMetric) setSelectedMetric(columnProfile.defaultMetric);
+    if (!selectedSecondaryMetric && columnProfile.defaultSecondaryMetric) setSelectedSecondaryMetric(columnProfile.defaultSecondaryMetric);
+  }, [columnProfile, selectedDimension, selectedMetric, selectedSecondaryMetric]);
+
+  const dimensionValues = useMemo(() => {
+    if (!selectedDimension) return [] as string[];
+    const values = new Set<string>();
+    data.forEach((row) => {
+      const raw = row[selectedDimension];
+      if (raw !== null && raw !== undefined && raw !== '') {
+        values.add(String(raw));
+      }
+    });
+    return Array.from(values).sort();
+  }, [data, selectedDimension]);
+
+  const baseRows = useMemo(() => {
+    let rows = data;
+    if (globalFilter !== 'all' && selectedDimension) {
+      rows = rows.filter((row) => String(row[selectedDimension] ?? '') === globalFilter);
     }
-    return null;
+    if (drillValue && selectedDimension) {
+      rows = rows.filter((row) => String(row[selectedDimension] ?? '') === drillValue);
+    }
+    return rows;
+  }, [data, drillValue, globalFilter, selectedDimension]);
+
+  const selectedChartType = useMemo<ChartType>(() => {
+    if (!selectedDimension || !selectedMetric) return 'bar';
+    const isTimeDimension = selectedDimension === columnProfile.dateColumn;
+    const distinctCount = new Set(baseRows.map((row) => String(row[selectedDimension] ?? 'Unknown'))).size;
+    if (isTimeDimension) return 'line';
+    if (distinctCount > 0 && distinctCount <= 6) return 'pie';
+    return 'bar';
+  }, [baseRows, columnProfile.dateColumn, selectedDimension, selectedMetric]);
+
+  const metricType = inferMetricType(selectedMetric);
+
+  const chartData = useMemo(() => {
+    if (!selectedDimension || !selectedMetric) return [] as Array<Record<string, unknown>>;
+
+    const aggregation = new Map<string, { primary: number; secondary: number }>();
+
+    baseRows.forEach((row) => {
+      const rawDimension = row[selectedDimension];
+      let key = String(rawDimension ?? 'Unknown');
+
+      if (selectedDimension === columnProfile.dateColumn) {
+        key = toMonthLabel(rawDimension) ?? key;
+      }
+
+      const bucket = aggregation.get(key) ?? { primary: 0, secondary: 0 };
+      bucket.primary += parseNumeric(row[selectedMetric]);
+      if (selectedSecondaryMetric) {
+        bucket.secondary += parseNumeric(row[selectedSecondaryMetric]);
+      }
+      aggregation.set(key, bucket);
+    });
+
+    const rows = Array.from(aggregation.entries()).map(([label, values]) => ({
+      label,
+      primary: values.primary,
+      secondary: values.secondary,
+    }));
+
+    if (selectedDimension === columnProfile.dateColumn) {
+      return rows.sort((a, b) => String(a.label).localeCompare(String(b.label)));
+    }
+
+    return rows.sort((a, b) => Number(b.primary) - Number(a.primary)).slice(0, 25);
+  }, [
+    baseRows,
+    columnProfile.dateColumn,
+    selectedDimension,
+    selectedMetric,
+    selectedSecondaryMetric,
+  ]);
+
+  const datasetOverview = useMemo(() => {
+    const rowCount = data.length;
+    const colCount = columns.length;
+    const missing = data.reduce((sum, row) => {
+      return sum + Object.values(row).filter((v) => v === null || v === undefined || v === '').length;
+    }, 0);
+    const denominator = Math.max(1, rowCount * Math.max(1, colCount));
+    const completeness = ((denominator - missing) / denominator) * 100;
+
+    return { rowCount, colCount, missing, completeness };
+  }, [columns.length, data]);
+
+  const sortedTableRows = useMemo(() => {
+    if (!baseRows.length) return [] as DataRow[];
+    const activeSort = sortColumn || selectedMetric || columns[0] || '';
+    if (!activeSort) return baseRows.slice(0, 50);
+
+    const copy = [...baseRows];
+    copy.sort((a, b) => {
+      const av = a[activeSort];
+      const bv = b[activeSort];
+      const an = parseNumeric(av);
+      const bn = parseNumeric(bv);
+      const bothNumeric = Number.isFinite(an) && Number.isFinite(bn) && (typeof av === 'number' || typeof av === 'string') && (typeof bv === 'number' || typeof bv === 'string');
+
+      let result = 0;
+      if (bothNumeric && (String(av).trim() !== '' || String(bv).trim() !== '')) {
+        result = an - bn;
+      } else {
+        result = String(av ?? '').localeCompare(String(bv ?? ''));
+      }
+      return sortDirection === 'asc' ? result : -result;
+    });
+
+    return copy.slice(0, 100);
+  }, [baseRows, columns, selectedMetric, sortColumn, sortDirection]);
+
+  const handleSort = (column: string) => {
+    if (sortColumn === column) {
+      setSortDirection((prev) => (prev === 'asc' ? 'desc' : 'asc'));
+      return;
+    }
+    setSortColumn(column);
+    setSortDirection('desc');
   };
 
-  const renderCustomLabel = (props: any) => {
-    const { x, y, width, value } = props;
-    return (
-      <text 
-        x={x + width / 2} 
-        y={y - 10} 
-        fill="#0f172a" 
-        textAnchor="middle" 
-        className="text-xs font-bold"
-      >
-        {typeof value === 'number' ? value.toFixed(1) : value}
-      </text>
-    );
+  const exportCleanedDataset = () => {
+    if (!data.length) return;
+    const headers = columns;
+    const rows = data.map((row) => headers.map((h) => toCSVCell(row[h])).join(','));
+    downloadBlob([headers.join(','), ...rows].join('\n'), 'cleaned_analytics_dataset.csv', 'text/csv;charset=utf-8;');
   };
 
-  const renderPieLabel = (entry: any) => {
-    return `${entry.name}: ${entry.value}`;
+  const exportChartImage = async () => {
+    if (!chartRef.current || isExportingChart) return;
+    setIsExportingChart(true);
+    try {
+      const canvas = await html2canvas(chartRef.current, {
+        scale: 2,
+        useCORS: true,
+        backgroundColor: '#ffffff',
+      });
+      const image = canvas.toDataURL('image/png');
+      const link = document.createElement('a');
+      link.href = image;
+      link.download = `${fileName.replace(/[^a-z0-9_-]/gi, '_')}_chart.png`;
+      document.body.appendChild(link);
+      link.click();
+      document.body.removeChild(link);
+    } catch (err) {
+      console.error('Chart export failed', err);
+      alert('Chart export failed. Please try again.');
+    } finally {
+      setIsExportingChart(false);
+    }
   };
+
+  const exportReportPDF = async () => {
+    if (!reportRef.current || isGeneratingPDF) return;
+    setIsGeneratingPDF(true);
+    try {
+      const canvas = await html2canvas(reportRef.current, {
+        scale: 2,
+        useCORS: true,
+        backgroundColor: '#f8fafc',
+      });
+      const imgData = canvas.toDataURL('image/png');
+      const pdf = new jsPDF({ orientation: 'portrait', unit: 'mm', format: 'a4' });
+
+      const pdfWidth = pdf.internal.pageSize.getWidth();
+      const pdfHeight = pdf.internal.pageSize.getHeight();
+      const imgWidth = canvas.width;
+      const imgHeight = canvas.height;
+      const ratio = Math.min(pdfWidth / imgWidth, pdfHeight / imgHeight);
+      const renderWidth = imgWidth * ratio;
+      const renderHeight = imgHeight * ratio;
+      const x = (pdfWidth - renderWidth) / 2;
+
+      let y = 0;
+      let remaining = renderHeight;
+
+      pdf.addImage(imgData, 'PNG', x, y, renderWidth, renderHeight);
+      remaining -= pdfHeight;
+
+      while (remaining > 0) {
+        y = remaining - renderHeight;
+        pdf.addPage();
+        pdf.addImage(imgData, 'PNG', x, y, renderWidth, renderHeight);
+        remaining -= pdfHeight;
+      }
+
+      pdf.save(`${fileName.replace(/[^a-z0-9_-]/gi, '_')}_insights_report.pdf`);
+    } catch (err) {
+      console.error('PDF export failed', err);
+      alert('PDF export failed. Please try again.');
+    } finally {
+      setIsGeneratingPDF(false);
+    }
+  };
+
+  const chartTitle = useMemo(() => {
+    if (!selectedDimension || !selectedMetric) return 'Interactive Chart';
+    return `${selectedMetric} by ${selectedDimension}`;
+  }, [selectedDimension, selectedMetric]);
+
+  const chartLegend = useMemo(() => {
+    if (!selectedSecondaryMetric) return [selectedMetric].filter(Boolean);
+    return [selectedMetric, selectedSecondaryMetric].filter(Boolean);
+  }, [selectedMetric, selectedSecondaryMetric]);
 
   return (
-    <div className="space-y-12 animate-in fade-in duration-700 bg-slate-50 -mx-6 px-6 py-12">
-      {/* BI Command Center Header */}
-      <div className="flex items-center justify-between mb-8 bg-white p-6 rounded-2xl border border-slate-200 shadow-sm">
-        <div className="flex items-center gap-4">
-          <LayoutIcon className="w-5 h-5 text-slate-400" />
-          <h2 className="text-lg font-bold text-slate-800 tracking-tight uppercase">Executive BI Canvas</h2>
-        </div>
-        <div className="flex gap-2">
-          <button className="p-2 hover:bg-slate-50 rounded-lg text-slate-400"><Filter className="w-4 h-4" /></button>
-          <button className="p-2 hover:bg-slate-50 rounded-lg text-slate-400"><Share2 className="w-4 h-4" /></button>
-          <button 
-            onClick={downloadCleanedCSV}
-            className="flex items-center gap-2 px-3 py-1.5 hover:bg-slate-50 border border-slate-200 rounded-lg text-slate-600 text-xs font-bold transition-all"
-            title="Export the cleaned dataset used for these insights"
-          >
-            <Download className="w-4 h-4" /> EXPORT CLEAN DATA
-          </button>
-          <button onClick={onReset} className="ml-4 px-4 py-2 bg-slate-900 text-white rounded-lg text-xs font-bold hover:bg-slate-800 transition-all">NEW ANALYSIS</button>
-        </div>
-      </div>
-
-      {/* Metric Tiles Tier (Power BI Cards) */}
-      <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4">
-        {analysis.descriptive.kpis.map((kpi, idx) => (
-          <div key={idx} className="bg-white p-6 rounded-2xl border border-slate-200 shadow-sm hover:shadow-md transition-shadow">
-            <p className="text-xs font-bold text-slate-400 uppercase tracking-widest mb-3">{kpi.label}</p>
-            <div className="flex items-end justify-between">
-              <div>
-                <span className="text-3xl font-black text-slate-900">{kpi.value}</span>
-                {kpi.change && (
-                  <div className={`flex items-center text-xs font-bold mt-2 ${kpi.trend === 'up' ? 'text-emerald-600' : kpi.trend === 'down' ? 'text-rose-600' : 'text-slate-400'}`}>
-                    {kpi.trend === 'up' ? <ArrowUpRight className="w-3 h-3 mr-1" /> : <ArrowDownRight className="w-3 h-3 mr-1" />}
-                    {kpi.change}
-                  </div>
-                )}
-              </div>
-              <div className="w-16 h-8 opacity-20">
-                <ResponsiveContainer width="100%" height="100%">
-                  <AreaChart data={analysis.biOverview.trend.slice(-5)}>
-                    <Area type="monotone" dataKey="value" stroke={kpi.trend === 'up' ? '#10b981' : '#f43f5e'} fill={kpi.trend === 'up' ? '#10b981' : '#f43f5e'} />
-                  </AreaChart>
-                </ResponsiveContainer>
-              </div>
+    <div className="-mx-6 bg-slate-50 px-6 py-8">
+      <div ref={reportRef} className="mx-auto max-w-7xl space-y-8">
+        <section className={`${PANEL} p-6`}>
+          <div className="flex flex-wrap items-start justify-between gap-4">
+            <div>
+              <h2 className="text-2xl font-bold text-slate-900">Analytics Dashboard</h2>
+              <p className={SUBTLE}>Interactive, readable visuals with auto-selected chart types and drill-down analysis.</p>
             </div>
-          </div>
-        ))}
-      </div>
-
-      {/* Visual Canvas Tier */}
-      <div className="grid grid-cols-1 lg:grid-cols-12 gap-6">
-        <div className="lg:col-span-8 bg-white p-8 rounded-3xl border border-slate-200 shadow-sm">
-          <div className="flex items-center justify-between mb-8">
-            <h4 className="text-sm font-bold text-slate-800 uppercase tracking-widest">Performance Momentum</h4>
-            <Maximize2 className="w-4 h-4 text-slate-300" />
-          </div>
-          <div className="h-[350px]">
-            <ResponsiveContainer width="100%" height="100%">
-              <AreaChart data={analysis.biOverview.trend}>
-                <defs>
-                  <linearGradient id="colorTrend" x1="0" y1="0" x2="0" y2="1">
-                    <stop offset="5%" stopColor="#0f172a" stopOpacity={0.1}/>
-                    <stop offset="95%" stopColor="#0f172a" stopOpacity={0}/>
-                  </linearGradient>
-                </defs>
-                <CartesianGrid strokeDasharray="3 3" vertical={false} stroke="#f1f5f9" />
-                <XAxis 
-                  dataKey="name" 
-                  axisLine={false} 
-                  tickLine={false} 
-                  tick={{fill: '#94a3b8', fontSize: 11, fontWeight: 600}} 
-                  label={{ value: 'Time Period', position: 'insideBottom', offset: -5, style: { fill: '#64748b', fontSize: 10, fontWeight: 700 } }}
-                />
-                <YAxis 
-                  axisLine={false} 
-                  tickLine={false} 
-                  tick={{fill: '#94a3b8', fontSize: 11, fontWeight: 600}}
-                  label={{ value: 'Value', angle: -90, position: 'insideLeft', style: { fill: '#64748b', fontSize: 10, fontWeight: 700 } }}
-                />
-                <Tooltip content={<CustomTooltip />} />
-                <Area 
-                  type="monotone" 
-                  dataKey="value" 
-                  stroke="#0f172a" 
-                  fillOpacity={1} 
-                  fill="url(#colorTrend)" 
-                  strokeWidth={3}
-                >
-                  <LabelList dataKey="value" position="top" style={{ fill: '#0f172a', fontSize: 11, fontWeight: 700 }} formatter={(value: number) => value.toFixed(1)} />
-                </Area>
-              </AreaChart>
-            </ResponsiveContainer>
-          </div>
-        </div>
-
-        <div className="lg:col-span-4 bg-white p-8 rounded-3xl border border-slate-200 shadow-sm flex flex-col">
-          <div className="flex items-center justify-between mb-8">
-            <h4 className="text-sm font-bold text-slate-800 uppercase tracking-widest">Category Split</h4>
-          </div>
-          <div className="flex-1 h-[250px]">
-            <ResponsiveContainer width="100%" height="100%">
-              <PieChart>
-                <Pie
-                  data={analysis.biOverview.composition}
-                  innerRadius={60}
-                  outerRadius={100}
-                  paddingAngle={5}
-                  dataKey="value"
-                  label={(entry) => `${entry.name}: ${entry.value}`}
-                  labelLine={{ stroke: '#94a3b8', strokeWidth: 1 }}
-                >
-                  {analysis.biOverview.composition.map((entry, index) => (
-                    <Cell key={`cell-${index}`} fill={COLORS[index % COLORS.length]} />
-                  ))}
-                </Pie>
-                <Tooltip content={<CustomTooltip />} />
-                <Legend 
-                  iconType="circle" 
-                  wrapperStyle={{ fontSize: '12px', fontWeight: 600 }}
-                  formatter={(value, entry: any) => `${value} (${entry.payload.value})`}
-                />
-              </PieChart>
-            </ResponsiveContainer>
-          </div>
-        </div>
-
-        <div className="lg:col-span-12 bg-white p-8 rounded-3xl border border-slate-200 shadow-sm">
-          <div className="flex items-center justify-between mb-8">
-            <h4 className="text-sm font-bold text-slate-800 uppercase tracking-widest">Comparative Distribution</h4>
-          </div>
-          <div className="h-[250px]">
-            <ResponsiveContainer width="100%" height="100%">
-              <BarChart data={analysis.biOverview.distribution}>
-                <CartesianGrid strokeDasharray="3 3" vertical={false} stroke="#f1f5f9" />
-                <XAxis 
-                  dataKey="category" 
-                  axisLine={false} 
-                  tickLine={false} 
-                  tick={{fill: '#94a3b8', fontSize: 11, fontWeight: 600}}
-                  label={{ value: 'Categories', position: 'insideBottom', offset: -5, style: { fill: '#64748b', fontSize: 10, fontWeight: 700 } }}
-                />
-                <YAxis 
-                  axisLine={false} 
-                  tickLine={false} 
-                  tick={{fill: '#94a3b8', fontSize: 11, fontWeight: 600}}
-                  label={{ value: 'Count', angle: -90, position: 'insideLeft', style: { fill: '#64748b', fontSize: 10, fontWeight: 700 } }}
-                />
-                <Tooltip content={<CustomTooltip />} cursor={{fill: '#f8fafc'}} />
-                <Bar dataKey="value" fill="#0f172a" radius={[4, 4, 0, 0]} barSize={40}>
-                  <LabelList dataKey="value" position="top" content={renderCustomLabel} />
-                </Bar>
-              </BarChart>
-            </ResponsiveContainer>
-          </div>
-        </div>
-      </div>
-
-      {/* Narrative Section */}
-      <div className="space-y-12 mt-16 max-w-5xl mx-auto">
-        <section className="bg-white rounded-[40px] p-12 border border-slate-200 shadow-lg">
-          <SectionHeader 
-            icon={BarChart2} 
-            title="Descriptive Summary" 
-            subtitle="Expert synthesis of observed patterns and performance metrics."
-          />
-          <div className="prose prose-slate prose-lg max-w-none">
-            <p className="text-slate-600 leading-relaxed font-light">
-              <span className="font-bold text-slate-900 border-b-2 border-slate-900 pb-1 mb-6 inline-block">EXECUTIVE TRANSCRIPT</span><br/>
-              {analysis.descriptive.narrative}
-            </p>
+            <div className="flex flex-wrap gap-2">
+              <button
+                onClick={exportChartImage}
+                disabled={isExportingChart}
+                className="inline-flex items-center gap-2 rounded-lg border border-slate-300 px-3 py-2 text-sm font-semibold text-slate-700 hover:bg-slate-100 disabled:cursor-not-allowed disabled:opacity-60"
+              >
+                <ImageDown className="h-4 w-4" />
+                {isExportingChart ? 'Exporting...' : 'Chart Image'}
+              </button>
+              <button
+                onClick={exportReportPDF}
+                disabled={isGeneratingPDF}
+                className="inline-flex items-center gap-2 rounded-lg border border-slate-300 px-3 py-2 text-sm font-semibold text-slate-700 hover:bg-slate-100 disabled:cursor-not-allowed disabled:opacity-60"
+              >
+                <FileDown className="h-4 w-4" />
+                {isGeneratingPDF ? 'Generating...' : 'Report PDF'}
+              </button>
+              <button
+                onClick={onReset}
+                className="inline-flex items-center gap-2 rounded-lg bg-slate-900 px-3 py-2 text-sm font-semibold text-white hover:bg-slate-800"
+              >
+                <RefreshCcw className="h-4 w-4" />
+                New Analysis
+              </button>
+            </div>
           </div>
         </section>
 
-        <section className="bg-white rounded-[40px] p-12 border border-slate-200 shadow-lg">
-          <SectionHeader 
-            icon={Activity} 
-            title="Diagnostic Deep Dive" 
-            subtitle="Identifying the 'Why' behind current data trajectories."
-          />
-          <div className="grid grid-cols-1 lg:grid-cols-2 gap-12">
-            <div className="prose prose-slate prose-lg">
-               <p className="text-slate-600 leading-relaxed font-light">
-                <span className="font-bold text-slate-900 border-b-2 border-slate-900 pb-1 mb-6 inline-block">ROOT CAUSE LOG</span><br/>
-                {analysis.diagnostic.narrative}
-              </p>
+        <section className={`${PANEL} p-6`}>
+          <h3 className="mb-4 text-lg font-bold text-slate-900">Dataset Overview</h3>
+          <div className="mb-5 grid grid-cols-1 gap-4 sm:grid-cols-2 xl:grid-cols-4">
+            <div className="rounded-xl bg-slate-50 p-4">
+              <p className="text-xs font-semibold uppercase tracking-wide text-slate-500">Rows</p>
+              <p className="mt-2 text-2xl font-bold text-slate-900">{datasetOverview.rowCount.toLocaleString()}</p>
             </div>
-            <div className="space-y-4">
-              <h4 className="text-[10px] font-bold text-slate-400 uppercase tracking-[0.2em] mb-4">Statistical Correlations</h4>
-              {analysis.diagnostic.correlations.map((corr, idx) => (
-                <div key={idx} className="p-5 bg-slate-50 rounded-2xl border border-slate-100 flex items-center justify-between">
-                  <div>
-                    <p className="text-sm font-bold text-slate-900">{corr.factor}</p>
-                    <p className="text-xs text-slate-500 font-medium">{corr.relationship}</p>
-                  </div>
-                  <div className="flex items-center gap-3">
-                    <div className="w-24 h-2 bg-slate-200 rounded-full overflow-hidden">
-                      <div 
-                        className="h-full bg-slate-900 rounded-full transition-all duration-1000" 
-                        style={{ width: `${corr.strength * 100}%` }}
-                      />
-                    </div>
-                    <span className="text-xs font-mono font-bold text-slate-400">{(corr.strength * 100).toFixed(0)}%</span>
-                  </div>
-                </div>
+            <div className="rounded-xl bg-slate-50 p-4">
+              <p className="text-xs font-semibold uppercase tracking-wide text-slate-500">Columns</p>
+              <p className="mt-2 text-2xl font-bold text-slate-900">{datasetOverview.colCount.toLocaleString()}</p>
+            </div>
+            <div className="rounded-xl bg-slate-50 p-4">
+              <p className="text-xs font-semibold uppercase tracking-wide text-slate-500">Missing Values</p>
+              <p className="mt-2 text-2xl font-bold text-amber-700">{datasetOverview.missing.toLocaleString()}</p>
+            </div>
+            <div className="rounded-xl bg-slate-50 p-4">
+              <p className="text-xs font-semibold uppercase tracking-wide text-slate-500">Completeness</p>
+              <p className="mt-2 text-2xl font-bold text-emerald-700">{datasetOverview.completeness.toFixed(1)}%</p>
+            </div>
+          </div>
+
+          <div className="mb-4 flex flex-wrap items-center gap-2">
+            <span className="inline-flex items-center gap-2 rounded-lg bg-slate-100 px-3 py-2 text-xs font-semibold text-slate-700">
+              <Filter className="h-3.5 w-3.5" />
+              Global Filter
+            </span>
+            <select
+              value={globalFilter}
+              onChange={(e) => {
+                setGlobalFilter(e.target.value);
+                setDrillValue(null);
+              }}
+              className="rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm text-slate-700"
+            >
+              <option value="all">All Values</option>
+              {dimensionValues.map((value) => (
+                <option key={value} value={value}>
+                  {value}
+                </option>
               ))}
-            </div>
+            </select>
+            {drillValue && (
+              <button
+                onClick={() => setDrillValue(null)}
+                className="rounded-lg border border-amber-300 bg-amber-50 px-3 py-2 text-xs font-semibold text-amber-800"
+              >
+                Clear Drill-down: {drillValue}
+              </button>
+            )}
           </div>
+
+          <div className="overflow-auto rounded-xl border border-slate-200">
+            <table className="min-w-full border-collapse text-sm">
+              <thead className="bg-slate-100 text-left text-xs uppercase tracking-wide text-slate-600">
+                <tr>
+                  {columns.slice(0, 10).map((col) => (
+                    <th key={col} className="px-4 py-3 font-semibold">
+                      <button onClick={() => handleSort(col)} className="inline-flex items-center gap-1 hover:text-slate-900">
+                        {col}
+                        {sortColumn === col ? (
+                          sortDirection === 'asc' ? <ArrowUpWideNarrow className="h-3.5 w-3.5" /> : <ArrowDownWideNarrow className="h-3.5 w-3.5" />
+                        ) : null}
+                      </button>
+                    </th>
+                  ))}
+                </tr>
+              </thead>
+              <tbody>
+                {sortedTableRows.slice(0, 10).map((row, idx) => (
+                  <tr key={idx} className="border-t border-slate-100 hover:bg-slate-50">
+                    {columns.slice(0, 10).map((col) => (
+                      <td key={col} className="max-w-[220px] truncate px-4 py-2 text-slate-700" title={String(row[col] ?? '')}>
+                        {String(row[col] ?? '')}
+                      </td>
+                    ))}
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+          <p className="mt-3 text-xs text-slate-500">Table supports sorting and reflects active filters/drill-down. Showing up to 10 rows.</p>
         </section>
 
-        <section className="bg-slate-900 rounded-[40px] p-12 text-white shadow-2xl relative overflow-hidden">
-          <div className="absolute top-0 right-0 w-64 h-64 bg-white/5 -mr-32 -mt-32 rounded-full blur-3xl"></div>
-          <div className="relative z-10">
-            <SectionHeader 
-              icon={TrendingUp} 
-              title="Predictive Horizon" 
-              subtitle="Statistical forecasting models applied to current momentum."
-            />
-            <div className="grid grid-cols-1 lg:grid-cols-12 gap-12 items-start">
-              <div className="lg:col-span-8 h-80">
+        <section className={`${PANEL} p-6`}>
+          <h3 className="mb-2 text-lg font-bold text-slate-900">Descriptive Insights (Charts)</h3>
+          <p className={`${SUBTLE} mb-5`}>Chart type is selected automatically: line for time trends, pie for compact proportions, and bar for comparisons.</p>
+
+          <div className="mb-5 grid grid-cols-1 gap-4 md:grid-cols-3">
+            <div>
+              <label className="mb-1 block text-xs font-semibold uppercase tracking-wide text-slate-500">Dimension</label>
+              <select
+                value={selectedDimension}
+                onChange={(e) => {
+                  setSelectedDimension(e.target.value);
+                  setGlobalFilter('all');
+                  setDrillValue(null);
+                }}
+                className="w-full rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm text-slate-700"
+              >
+                {columns.map((col) => (
+                  <option key={col} value={col}>
+                    {col}
+                  </option>
+                ))}
+              </select>
+            </div>
+            <div>
+              <label className="mb-1 block text-xs font-semibold uppercase tracking-wide text-slate-500">Primary Metric</label>
+              <select
+                value={selectedMetric}
+                onChange={(e) => setSelectedMetric(e.target.value)}
+                className="w-full rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm text-slate-700"
+              >
+                {columnProfile.numericColumns.map((col) => (
+                  <option key={col} value={col}>
+                    {col}
+                  </option>
+                ))}
+              </select>
+            </div>
+            <div>
+              <label className="mb-1 block text-xs font-semibold uppercase tracking-wide text-slate-500">Secondary Metric (Optional)</label>
+              <select
+                value={selectedSecondaryMetric}
+                onChange={(e) => setSelectedSecondaryMetric(e.target.value)}
+                className="w-full rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm text-slate-700"
+              >
+                <option value="">None</option>
+                {columnProfile.numericColumns.filter((col) => col !== selectedMetric).map((col) => (
+                  <option key={col} value={col}>
+                    {col}
+                  </option>
+                ))}
+              </select>
+            </div>
+          </div>
+
+          <div ref={chartRef} className="rounded-xl border border-slate-200 p-4">
+            <div className="mb-3 flex flex-wrap items-center justify-between gap-2">
+              <div>
+                <h4 className="text-base font-bold text-slate-900">{chartTitle}</h4>
+                <p className="text-xs text-slate-500">Type: {selectedChartType.toUpperCase()} | Click a data point to drill down.</p>
+              </div>
+              <div className="text-xs font-medium text-slate-600">Legend: {chartLegend.join(' | ') || 'Primary metric'}</div>
+            </div>
+
+            <div className="h-[380px] w-full">
+              {chartData.length === 0 ? (
+                <div className="flex h-full items-center justify-center text-sm text-slate-400">No chart data available for current selection.</div>
+              ) : (
                 <ResponsiveContainer width="100%" height="100%">
-                  <AreaChart data={analysis.predictive.forecast}>
-                    <defs>
-                      <linearGradient id="colorWhite" x1="0" y1="0" x2="0" y2="1">
-                        <stop offset="5%" stopColor="#ffffff" stopOpacity={0.2}/>
-                        <stop offset="95%" stopColor="#ffffff" stopOpacity={0}/>
-                      </linearGradient>
-                    </defs>
-                    <CartesianGrid strokeDasharray="3 3" vertical={false} stroke="rgba(255,255,255,0.05)" />
-                    <XAxis 
-                      dataKey="period" 
-                      axisLine={false} 
-                      tickLine={false} 
-                      tick={{fill: '#94a3b8', fontSize: 11, fontWeight: 600}}
-                      label={{ value: 'Forecast Period', position: 'insideBottom', offset: -5, style: { fill: '#94a3b8', fontSize: 10, fontWeight: 700 } }}
-                    />
-                    <YAxis 
-                      axisLine={false} 
-                      tickLine={false} 
-                      tick={{fill: '#94a3b8', fontSize: 11, fontWeight: 600}}
-                      label={{ value: 'Predicted Value', angle: -90, position: 'insideLeft', style: { fill: '#94a3b8', fontSize: 10, fontWeight: 700 } }}
-                    />
-                    <Tooltip 
-                      contentStyle={{backgroundColor: '#1e293b', border: 'none', borderRadius: '12px', color: '#fff'}} 
-                      labelStyle={{color: '#94a3b8', fontWeight: 600, fontSize: 11, marginBottom: 4}}
-                      itemStyle={{color: '#fff', fontWeight: 700, fontSize: 13}}
-                      formatter={(value: number) => [value.toFixed(2), 'Predicted']}
-                    />
-                    <Area type="monotone" dataKey="predicted" stroke="#ffffff" fillOpacity={1} fill="url(#colorWhite)" strokeWidth={3}>
-                      <LabelList dataKey="predicted" position="top" style={{ fill: '#ffffff', fontSize: 11, fontWeight: 700 }} formatter={(value: number) => value.toFixed(1)} />
-                    </Area>
-                  </AreaChart>
+                  {selectedChartType === 'line' ? (
+                    <LineChart data={chartData}>
+                      <CartesianGrid strokeDasharray="3 3" vertical={false} stroke="#E2E8F0" />
+                      <XAxis dataKey="label" tick={{ fill: '#64748B', fontSize: 11 }} axisLine={false} tickLine={false} />
+                      <YAxis tick={{ fill: '#64748B', fontSize: 11 }} axisLine={false} tickLine={false} tickFormatter={(v) => metricFormatter(metricType, Number(v))} />
+                      <Tooltip formatter={(value: number) => metricFormatter(metricType, Number(value))} />
+                      <Legend />
+                      <Line
+                        type="monotone"
+                        dataKey="primary"
+                        name={selectedMetric || 'Primary'}
+                        stroke={COLORS[0]}
+                        strokeWidth={3}
+                        dot
+                        onClick={(e: any) => setDrillValue(String(e?.payload?.label ?? ''))}
+                      />
+                      {selectedSecondaryMetric && (
+                        <Line
+                          type="monotone"
+                          dataKey="secondary"
+                          name={selectedSecondaryMetric}
+                          stroke={COLORS[1]}
+                          strokeWidth={2}
+                          dot
+                          onClick={(e: any) => setDrillValue(String(e?.payload?.label ?? ''))}
+                        />
+                      )}
+                      <Brush dataKey="label" height={22} stroke="#0F172A" />
+                    </LineChart>
+                  ) : selectedChartType === 'pie' ? (
+                    <PieChart>
+                      <Pie
+                        data={chartData}
+                        dataKey="primary"
+                        nameKey="label"
+                        outerRadius={120}
+                        label={({ name, percent }) => `${name}: ${((percent ?? 0) * 100).toFixed(0)}%`}
+                        onClick={(entry: any) => setDrillValue(String(entry?.label ?? ''))}
+                      >
+                        {chartData.map((_, i) => (
+                          <Cell key={`slice-${i}`} fill={COLORS[i % COLORS.length]} />
+                        ))}
+                      </Pie>
+                      <Tooltip formatter={(value: number) => metricFormatter(metricType, Number(value))} />
+                      <Legend />
+                    </PieChart>
+                  ) : (
+                    <BarChart data={chartData}>
+                      <CartesianGrid strokeDasharray="3 3" vertical={false} stroke="#E2E8F0" />
+                      <XAxis dataKey="label" tick={{ fill: '#64748B', fontSize: 11 }} axisLine={false} tickLine={false} />
+                      <YAxis tick={{ fill: '#64748B', fontSize: 11 }} axisLine={false} tickLine={false} tickFormatter={(v) => metricFormatter(metricType, Number(v))} />
+                      <Tooltip formatter={(value: number) => metricFormatter(metricType, Number(value))} />
+                      <Legend />
+                      <Bar
+                        dataKey="primary"
+                        name={selectedMetric || 'Primary'}
+                        fill={COLORS[0]}
+                        onClick={(entry: any) => setDrillValue(String(entry?.label ?? ''))}
+                      />
+                      {selectedSecondaryMetric && <Bar dataKey="secondary" name={selectedSecondaryMetric} fill={COLORS[1]} />}
+                      <Brush dataKey="label" height={22} stroke="#0F172A" />
+                    </BarChart>
+                  )}
                 </ResponsiveContainer>
-              </div>
-              <div className="lg:col-span-4 space-y-8">
-                <div className="p-8 bg-white/5 backdrop-blur-md rounded-3xl border border-white/10">
-                  <div className="flex items-center justify-between mb-6">
-                    <span className="text-[10px] font-bold uppercase tracking-widest text-slate-400">Confidence Interval</span>
-                    <ShieldCheck className="w-5 h-5 text-emerald-400" />
-                  </div>
-                  <p className="text-6xl font-black mb-2 tracking-tighter">{(analysis.predictive.confidence * 100).toFixed(0)}%</p>
-                  <p className="text-xs text-slate-400 font-medium leading-relaxed">Probability score calibrated via monte carlo simulation.</p>
-                </div>
-              </div>
-            </div>
-            <div className="mt-12 prose prose-invert prose-lg max-w-none">
-              <p className="text-slate-300 leading-relaxed font-light">
-                <span className="font-bold text-white uppercase tracking-widest text-xs border-b border-white/20 pb-1 mb-4 inline-block">FORECAST NARRATIVE</span><br/>
-                {analysis.predictive.narrative}
-              </p>
+              )}
             </div>
           </div>
         </section>
 
-        <section className="bg-white rounded-[40px] p-12 border border-slate-200 shadow-lg">
-          <SectionHeader 
-            icon={Lightbulb} 
-            title="Prescriptive Actions" 
-            subtitle="Strategic roadmap generated from diagnostic and predictive findings."
-          />
-          <div className="grid grid-cols-1 md:grid-cols-3 gap-6 mb-12">
-            {analysis.prescriptive.recommendations.map((rec, idx) => (
-              <div key={idx} className="flex flex-col p-8 bg-slate-50 border border-slate-100 rounded-[32px] hover:border-slate-900 transition-all group">
-                <div className="mb-6">
-                  <span className={`text-[10px] font-black uppercase tracking-widest px-3 py-1.5 rounded-full ${
-                    rec.priority === 'High' ? 'bg-rose-100 text-rose-700' : 
-                    rec.priority === 'Medium' ? 'bg-amber-100 text-amber-700' : 'bg-emerald-100 text-emerald-700'
-                  }`}>
-                    {rec.priority} PRIORITY
-                  </span>
-                </div>
-                <h4 className="text-xl font-bold text-slate-900 mb-4 group-hover:text-slate-900">{rec.action}</h4>
-                <p className="text-sm text-slate-500 leading-relaxed font-medium flex-1">{rec.impact}</p>
-                <div className="mt-8 pt-8 border-t border-slate-200">
-                  <button className="text-[10px] font-black text-slate-900 flex items-center gap-2 group-hover:gap-3 transition-all tracking-widest uppercase">
-                    VIEW PLAN <ArrowUpRight className="w-3 h-3" />
-                  </button>
-                </div>
-              </div>
-            ))}
+        <section className={`${PANEL} p-6`}>
+          <h3 className="mb-2 text-lg font-bold text-slate-900">Predictive Insights</h3>
+          <div className="grid grid-cols-1 gap-4 md:grid-cols-3">
+            <div className="rounded-xl bg-slate-50 p-4">
+              <p className="text-xs font-semibold uppercase tracking-wide text-slate-500">Model Confidence</p>
+              <p className="mt-2 text-2xl font-bold text-slate-900">{(analysis.predictive.confidence * 100).toFixed(1)}%</p>
+            </div>
+            <div className="rounded-xl bg-slate-50 p-4 md:col-span-2">
+              <p className="text-xs font-semibold uppercase tracking-wide text-slate-500">Forecast Narrative</p>
+              <p className="mt-2 text-sm leading-6 text-slate-700">{analysis.predictive.narrative}</p>
+            </div>
           </div>
 
-          <div className="bg-slate-50 p-10 rounded-[32px] border border-slate-100">
-            <div className="flex items-start gap-4 mb-8">
-              <AlertCircle className="w-5 h-5 text-slate-400 mt-1" />
-              <p className="text-xs text-slate-500 font-medium italic leading-relaxed">
-                <span className="font-bold text-slate-900 uppercase tracking-widest text-[9px] not-italic mr-2 px-2 py-0.5 bg-slate-200 rounded">Liability Notice:</span>
-                {analysis.prescriptive.disclaimer}
-              </p>
+          <div className="mt-5 rounded-xl border border-slate-200 bg-slate-50 p-4">
+            <div className="mb-2 flex items-center gap-2 text-slate-700">
+              <TrendingUp className="h-4 w-4" />
+              <p className="text-sm font-semibold">Model Explanation</p>
             </div>
-            <div className="prose prose-slate prose-lg max-w-none">
-              <p className="text-slate-600 leading-relaxed font-light">
-                <span className="font-bold text-slate-900 italic border-b border-slate-200 pb-1 mb-6 inline-block">DECISION SUPPORT TRANSCRIPT</span><br/>
-                {analysis.prescriptive.narrative}
-              </p>
+            <p className="text-sm leading-6 text-slate-600">{analysis.predictive.modelExplanation}</p>
+          </div>
+        </section>
+
+        <section className={`${PANEL} p-6`}>
+          <h3 className="mb-4 text-lg font-bold text-slate-900">Download Section</h3>
+          <div className="grid grid-cols-1 gap-3 md:grid-cols-3">
+            <button
+              onClick={exportChartImage}
+              className="inline-flex items-center justify-center gap-2 rounded-xl border border-slate-300 bg-white px-4 py-3 text-sm font-semibold text-slate-700 hover:bg-slate-100"
+            >
+              <ImageDown className="h-4 w-4" />
+              Download Chart Image
+            </button>
+            <button
+              onClick={exportReportPDF}
+              className="inline-flex items-center justify-center gap-2 rounded-xl border border-slate-300 bg-white px-4 py-3 text-sm font-semibold text-slate-700 hover:bg-slate-100"
+            >
+              <FileDown className="h-4 w-4" />
+              Download PDF Report
+            </button>
+            <button
+              onClick={exportCleanedDataset}
+              className="inline-flex items-center justify-center gap-2 rounded-xl border border-slate-300 bg-white px-4 py-3 text-sm font-semibold text-slate-700 hover:bg-slate-100"
+            >
+              <Download className="h-4 w-4" />
+              Download Cleaned Dataset
+            </button>
+          </div>
+        </section>
+
+        <section className={`${PANEL} p-6`}>
+          <h3 className="mb-3 text-lg font-bold text-slate-900">Additional Diagnostic Summary</h3>
+          <div className="grid grid-cols-1 gap-4 lg:grid-cols-2">
+            <div className="rounded-xl border border-slate-200 p-4">
+              <h4 className="mb-2 inline-flex items-center gap-2 text-sm font-semibold text-slate-700">
+                <Table className="h-4 w-4" />
+                Diagnostic Narrative
+              </h4>
+              <p className="text-sm leading-6 text-slate-600">{analysis.diagnostic.narrative}</p>
+            </div>
+            <div className="rounded-xl border border-slate-200 p-4">
+              <h4 className="mb-2 text-sm font-semibold text-slate-700">Correlations</h4>
+              <div className="space-y-2">
+                {analysis.diagnostic.correlations.slice(0, 5).map((corr, idx) => (
+                  <div key={`${corr.factor}-${idx}`} className="rounded-lg bg-slate-50 p-3">
+                    <p className="text-sm font-semibold text-slate-800">{corr.factor}</p>
+                    <p className="text-xs text-slate-600">{corr.relationship} ({(corr.strength * 100).toFixed(0)}%)</p>
+                  </div>
+                ))}
+              </div>
             </div>
           </div>
         </section>
