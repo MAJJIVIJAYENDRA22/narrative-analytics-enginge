@@ -141,6 +141,42 @@ Example: Focus on high-performing regions to maximize revenue
 | Data Validation | Pandera / Custom Rules | Data quality checking and validation |
 | Export & Reporting | CSV, PDF generation | Download cleaned data and reports |
 
+## 📊 Output
+
+The system generates meaningful analytical results in the form of insights, visualizations, and summaries. Below are the outputs produced by the Narrative Analytics Engine:
+
+---
+
+### 🏠 Dashboard Output
+![Dashboard Overview](./screenshots/Dashboard_Overview.jpeg)
+
+The dashboard provides a complete overview of the system, including processed data, insights, and summary information in a structured format.
+
+---
+
+### 📊 Descriptive Insights Visualization
+![Descriptive Insights](./screenshots/Descripitive_insights.jpeg)
+
+Descriptive insights are presented using charts and graphs, helping users understand trends, patterns, and data distribution effectively.
+
+---
+
+### 🧠 Insight Output
+![Insights](./screenshots/Insights.jpeg)
+
+The system extracts key insights from the dataset and presents them in a structured format, highlighting important findings and analytical results.
+
+---
+
+### 📌 Output Summary
+
+- Displays processed and cleaned data  
+- Provides descriptive visualizations  
+- Generates meaningful insights  
+- Supports decision-making through data interpretation  
+
+---
+
 ## ⚙️ Installation
 
 Clone the repository:
