@@ -130,29 +130,16 @@ Example: Focus on high-performing regions to maximize revenue
 
 ## 🛠️ Technology Stack
 
-### Frontend
-- React  
-- HTML  
-- CSS  
-
-### Backend
-- FastAPI  
-- Python  
-
-### Data Processing
-- Pandas  
-- NumPy  
-
-### Machine Learning / Analytics
-- Scikit-learn  
-- K-Means Clustering  
-- Linear Regression  
-- Statistical Methods  
-
-### Visualization
-- Plotly / Chart Libraries  
-
----
+| Layer | Technology | Purpose |
+|------|-----------|---------|
+| Frontend | React, HTML, CSS | User interface and dashboard design |
+| Backend | FastAPI, Python | API handling and server-side logic |
+| Data Processing | Pandas, NumPy | Data cleaning, transformation, and analysis |
+| Machine Learning / Analytics | Scikit-learn | K-Means clustering and Linear Regression |
+| Statistical Analysis | SciPy, Statsmodels | Hypothesis testing and statistical validation |
+| Visualization | Plotly / Chart Libraries | Graphs and charts for descriptive insights |
+| Data Validation | Pandera / Custom Rules | Data quality checking and validation |
+| Export & Reporting | CSV, PDF generation | Download cleaned data and reports |
 
 ## ⚙️ Installation
 
