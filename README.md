@@ -1,219 +1,179 @@
-**Narrative Analytics Engine
-Overview**
+**🚀 Narrative Analytics Engine
+**
+** 📌 Overview**
 
-The Narrative Analytics Engine is a web-based analytics platform that transforms structured datasets into clear narratives, insights, and recommendations.
-Unlike traditional dashboards that rely only on charts, this system provides human-readable explanations and structured analytics categories to help users understand data more easily.
+The Narrative Analytics Engine is a web-based analytics platform that transforms structured datasets into clear insights, visualizations, and human-readable explanations.
 
-The platform validates data quality, cleans datasets, extracts insights, and generates narrative explanations while supporting responsible visualization and downloadable reports.
+Unlike traditional dashboards that rely only on charts, this system provides understandable analytics by combining data processing, statistical analysis, and narrative generation. It helps both technical and non-technical users understand data easily.
 
-**Key Features**
-1. Cleaned Dataset Download
+**The platform focuses on data validation, automated cleaning, insight extraction, visualization, and decision-support analytics.
+**
+---
 
-Allows users to download the cleaned and preprocessed dataset.
+## ✨ Key Features
 
-Ensures transparency between raw and processed data.
+### 🔍 Data Validation & Quality Control
+- Detects schema and data types  
+- Generates a data quality score  
+- Prevents analysis if data is invalid  
 
-Enables reuse of cleaned data for future analysis.
+---
 
-2. Intelligent Data Validation & Quality Control
+### 🧹 Data Cleaning & Preprocessing
+- Handles missing values and duplicates  
+- Normalizes categorical data  
+- Detects and treats outliers  
+- Maintains processing transparency  
 
-Automatically validates dataset schema and column types.
+---
 
-Generates a Data Quality Report with a quality score.
+### 📊 Analytical Processing
+- Exploratory Data Analysis (EDA)  
+- Statistical analysis  
+- K-Means clustering for segmentation  
+- Linear regression for trend prediction  
 
-Prevents analysis if dataset quality falls below the required threshold.
+---
 
-3. Automated Data Cleaning & Preprocessing
+### 📈 Visualization (Current Implementation)
+- Visualizations are generated only for descriptive insights  
+- Helps understand trends and comparisons clearly  
 
-Handles missing values and duplicates.
+---
 
-Normalizes categorical data.
+### 📦 Cleaned Dataset Download
+- Allows users to download processed dataset  
+- Ensures transparency between raw and cleaned data  
 
-Detects and treats outliers.
+---
 
-Maintains a cleaning log (audit trail).
+### 📄 Report Generation
+- Generates structured analysis output  
+- Can be extended to full report export  
 
-4. Insight Categorization
+---
 
-The system organizes insights into four analytical categories:
+## 🧩 System Architecture
 
-Descriptive Insights
+User Upload (CSV )  
+↓  
+Data Validation & Quality Assessment  
+↓  
+Data Cleaning & Preprocessing  
+↓  
+EDA & Statistical Analysis  
+(K-Means + Linear Regression)  
+↓  
+Insight Extraction  
+↓  
+Visualization (Descriptive Only)  
+↓  
+Output Display + Download  
 
-What happened in the data
+---
 
-Trends, patterns, and correlations
+## 🔄 Project Workflow
 
-Diagnostic Insights
+1. User uploads dataset (CSV / JSON)  
+2. System validates dataset structure and quality  
+3. Data cleaning and preprocessing are applied  
+4. Analytical processing is performed (EDA + ML models)  
+5. Insights are extracted  
+6. Descriptive insights are visualized  
+7. Results are displayed and dataset can be downloaded  
 
-Why it happened
+---
 
-Root cause analysis
+ **📌 Current Status**
 
-Predictive Insights
+The system is currently implemented up to the visualization stage.
 
-What may happen next
+- Data validation  
+- Data cleaning  
+- EDA  
+- Statistical analysis  
+- Insight extraction  
+- Descriptive visualization  
 
-Trend forecasting
+---
 
-Prescriptive Insights
+**🚀 Future Enhancement**
 
-What actions should be taken
+In future versions, the system will provide complete narrative-based insight explanations.
 
-Data-driven recommendations
+**🔹 Planned Insight Categories**
 
-5. Responsible Visualization
+**Descriptive Insights**  
+Explains what happened in the data  
+Example: Sales increased steadily over the last quarter  
 
-Charts are displayed only for descriptive insights.
+**Diagnostic Insights**  
+Explains why it happened  
+Example: Increase is due to higher demand in specific regions  
 
-Predictive and prescriptive outputs are explained through narratives to avoid misleading visualizations.
+**Predictive Insights**  
+Explains what may happen next  
+Example: Sales are expected to grow further if trends continue  
 
-6. Automated Insight Extraction
+**Prescriptive Insights**  
+Suggests what actions should be taken  
+Example: Focus on high-performing regions to maximize revenue  
 
-Detects trends, anomalies, and patterns automatically.
+---
+**🎯 Enhancement Goals**
+- Convert analytics into easy-to-read text explanations  
+- Improve understanding for non-technical users  
+- Reduce dependency on charts  
+- Provide decision-support insights  
 
-Ranks insights based on importance and impact.
+---
 
-7. Narrative Insight Generation
+## 🛠️ Technology Stack
 
-Converts numerical analysis results into human-readable explanations using rule-based Natural Language Generation (NLG).
+### Frontend
+- React  
+- HTML  
+- CSS  
 
-Makes analytics understandable for non-technical users.
+### Backend
+- FastAPI  
+- Python  
 
-8. Overall Insight Summary
+### Data Processing
+- Pandas  
+- NumPy  
 
-Provides an executive-level overview summarizing:
+### Machine Learning / Analytics
+- Scikit-learn  
+- K-Means Clustering  
+- Linear Regression  
+- Statistical Methods  
 
-descriptive findings
+### Visualization
+- Plotly / Chart Libraries  
 
-diagnostic causes
+---
 
-predictive trends
+## ⚙️ Installation
 
-prescriptive recommendations
+Clone the repository:
+git clone https://github.com/MAJJIVIJAYENDRA22/narrative-analytics-enginge.git
 
-9. Complete Report Download
-
-Users can download a full analysis report including:
-
-Data Quality Report
-
-Cleaned Dataset Summary
-
-Categorized Insights
-
-Visualizations
-
-Overall Insight Summary
-
-10. Unified Web Dashboard
-
-The platform provides a clean dashboard with dedicated sections for:
-
-Data Quality
-
-Cleaned Data
-
-Descriptive Insights
-
-Diagnostic Insights
-
-Predictive Insights
-
-Prescriptive Insights
-
-Overall Summary
-
-**Technology Stack**
-
-Frontend
-
-React
-
-HTML
-
-CSS
-
-Backend
-
-FastAPI
-
-Python
-
-Data Processing
-
-Pandas
-
-NumPy
-
-Machine Learning / Analytics
-
-Scikit-learn
-
-Statistical analysis methods
-
-Visualization
-
-Plotly / Chart libraries
-
-**System Architecture**
-User Upload
-      │
-      ▼
-Data Validation & Quality Assessment
-      │
-      ▼
-Data Cleaning & Preprocessing
-      │
-      ▼
-Insight Extraction Engine
-      │
-      ├── Descriptive Insights (with charts)
-      ├── Diagnostic Insights
-      ├── Predictive Insights
-      │
-      ▼
-Narrative Generation
-      │
-      ▼
-Dashboard Visualization
-      │
-      ▼
-Report & Dataset Download
-Project Workflow
-
-User uploads dataset (CSV / JSON).
-
-System validates dataset structure and quality.
-
-Data cleaning and preprocessing are applied.
-
-Analytical insights are extracted and categorized.
-
-Narratives are generated from analytical results.
-
-Descriptive insights are visualized.
-
-Final report and cleaned dataset are available for download.
-
-**Installation**
-Clone the repository
-git clone: https://github.com/MAJJIVIJAYENDRA22/narrative-analytics-enginge.git
-Navigate to the project directory
+Navigate to the project directory:
 cd narrative-analytics-engine
-Install dependencies
+
+Install backend dependencies:
 pip install -r requirements.txt
-Run backend
+
+Run backend:
 uvicorn main:app --reload
-Run frontend
+
+Run frontend:
 npm install
 npm start
-Future Improvements
 
-Integration with real-time data sources
+---
 
-Advanced machine learning models
+## 📜 License
 
-Natural language query interface
-
-Interactive storytelling dashboards
-
+This project is developed for academic and educational purposes.
