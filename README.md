@@ -1,6 +1,6 @@
-**🚀 Narrative Analytics Engine
-**
-** 📌 Overview**
+**🚀 Narrative Analytics Engine**
+
+**📌 Overview**
 
 The Narrative Analytics Engine is a web-based analytics platform that transforms structured datasets into clear insights, visualizations, and human-readable explanations.
 
